@@ -23,6 +23,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   if (!isOpen) return null;
 
+  const handleProviderChange = (newProvider: any) => {
+    setProvider(newProvider);
+    if (newProvider === 'openrouter') {
+      setModel('openai/gpt-4o-mini');
+    } else if (newProvider === 'gemini') {
+      setModel('gemini-1.5-flash');
+    } else if (newProvider === 'openai') {
+      setModel('gpt-4o-mini');
+    }
+  };
+
   const handleSave = () => {
     onSaveSettings({
       provider,
@@ -65,15 +76,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <label className="text-xs font-semibold text-slate-300">Generation Engine</label>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-1.5">
               {[
-                { id: 'smart_offline', label: '⚡ Smart Offline (Zero Key)' },
+                { id: 'openrouter', label: '⚡ OpenRouter (ChatGPT & Gemini)' },
                 { id: 'gemini', label: 'Google Gemini' },
-                { id: 'openai', label: 'OpenAI (GPT-4o)' },
+                { id: 'openai', label: 'OpenAI (Direct)' },
+                { id: 'smart_offline', label: 'Offline Smart (Zero Key)' },
                 { id: 'groq', label: 'Groq (Ultra Fast)' },
-                { id: 'openrouter', label: 'OpenRouter' },
               ].map((p) => (
                 <button
                   key={p.id}
-                  onClick={() => setProvider(p.id as any)}
+                  onClick={() => handleProviderChange(p.id)}
                   className={`p-2.5 rounded-xl text-xs font-medium border text-left transition ${
                     provider === p.id
                       ? 'bg-purple-600/30 border-purple-500 text-white font-bold'
@@ -89,13 +100,46 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {provider !== 'smart_offline' && (
             <>
               <div>
-                <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
-                  <span>API Key</span>
-                  <span className="text-[10px] text-slate-500">Stored locally in your browser</span>
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-slate-300">
+                    {provider === 'openrouter'
+                      ? 'OpenRouter API Key'
+                      : provider === 'gemini'
+                      ? 'Google Gemini API Key'
+                      : 'API Key'}
+                  </label>
+                  {provider === 'openrouter' && (
+                    <a
+                      href="https://openrouter.ai/keys"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] text-cyan-400 hover:underline flex items-center gap-0.5"
+                    >
+                      <span>Get OpenRouter Key</span>
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                  {provider === 'gemini' && (
+                    <a
+                      href="https://aistudio.google.com/app/apikey"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] text-cyan-400 hover:underline flex items-center gap-0.5"
+                    >
+                      <span>Get Gemini Key</span>
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                </div>
                 <input
                   type="password"
-                  placeholder={`Enter your ${provider.toUpperCase()} API Key...`}
+                  placeholder={
+                    provider === 'openrouter'
+                      ? 'sk-or-v1-...'
+                      : provider === 'gemini'
+                      ? 'AIzaSy...'
+                      : 'sk-...'
+                  }
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   className="w-full mt-1.5 p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs font-mono text-white focus:outline-none focus:border-purple-500"
@@ -103,20 +147,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-slate-300">Custom Model (Optional)</label>
-                <input
-                  type="text"
-                  placeholder={
-                    provider === 'gemini'
-                      ? 'gemini-1.5-flash'
-                      : provider === 'groq'
-                      ? 'llama-3.3-70b-versatile'
-                      : 'gpt-4o-mini'
-                  }
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  className="w-full mt-1.5 p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs font-mono text-white focus:outline-none focus:border-purple-500"
-                />
+                <label className="text-xs font-semibold text-slate-300">AI Model</label>
+                {provider === 'openrouter' ? (
+                  <select
+                    value={model || 'openai/gpt-4o-mini'}
+                    onChange={(e) => setModel(e.target.value)}
+                    className="w-full mt-1.5 p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-purple-500 cursor-pointer"
+                  >
+                    <option value="openai/gpt-4o-mini">openai/gpt-4o-mini (ChatGPT - Best & Fast)</option>
+                    <option value="openai/gpt-4o">openai/gpt-4o (ChatGPT Flagship)</option>
+                    <option value="openai/chatgpt-4o-latest">openai/chatgpt-4o-latest</option>
+                    <option value="google/gemini-2.0-flash-001">google/gemini-2.0-flash-001 (Free / Ultra Fast)</option>
+                    <option value="deepseek/deepseek-chat">deepseek/deepseek-chat (DeepSeek V3)</option>
+                    <option value="anthropic/claude-3.5-haiku">anthropic/claude-3.5-haiku</option>
+                  </select>
+                ) : provider === 'gemini' ? (
+                  <select
+                    value={model || 'gemini-1.5-flash'}
+                    onChange={(e) => setModel(e.target.value)}
+                    className="w-full mt-1.5 p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-purple-500 cursor-pointer"
+                  >
+                    <option value="gemini-1.5-flash">gemini-1.5-flash (Fast & Free)</option>
+                    <option value="gemini-2.0-flash">gemini-2.0-flash (Latest & Smartest)</option>
+                    <option value="gemini-1.5-pro">gemini-1.5-pro (Deep Reasoning)</option>
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    placeholder="gpt-4o-mini"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    className="w-full mt-1.5 p-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs font-mono text-white focus:outline-none focus:border-purple-500"
+                  />
+                )}
               </div>
             </>
           )}

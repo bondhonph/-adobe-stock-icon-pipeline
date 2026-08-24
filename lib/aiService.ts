@@ -21,8 +21,9 @@ Rules:
 
   try {
     if (settings.provider === 'gemini') {
+      const model = settings.model || 'gemini-1.5-flash';
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${settings.model || 'gemini-1.5-flash'}:generateContent?key=${settings.apiKey}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.apiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -50,15 +51,22 @@ Rules:
         settings.provider === 'groq'
           ? 'llama-3.3-70b-versatile'
           : settings.provider === 'openrouter'
-          ? 'google/gemini-2.0-flash-001'
+          ? 'openai/gpt-4o-mini'
           : 'gpt-4o-mini';
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${settings.apiKey}`
+      };
+
+      if (settings.provider === 'openrouter') {
+        headers['HTTP-Referer'] = 'https://adobe-stock-icon-pipeline.vercel.app';
+        headers['X-Title'] = 'Adobe Stock Icon Generator';
+      }
 
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${settings.apiKey}`
-        },
+        headers,
         body: JSON.stringify({
           model: settings.model || defaultModel,
           messages: [
