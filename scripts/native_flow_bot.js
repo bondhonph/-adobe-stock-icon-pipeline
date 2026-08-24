@@ -55,6 +55,7 @@ async function runNativeAutoPilot() {
   const context = await chromium.launchPersistentContext(BOT_PROFILE_DIR, {
     headless: false,
     channel: 'chrome',
+    acceptDownloads: true,
     args: [
       '--start-maximized',
       '--no-first-run',
@@ -71,10 +72,19 @@ async function runNativeAutoPilot() {
   await page.goto('https://labs.google/fx/tools/flow', { waitUntil: 'domcontentloaded', timeout: 45000 });
   await page.waitForTimeout(4000);
 
+  // Auto-close banner popups if any
+  try {
+    const bannerClose = await page.$('button[aria-label*="Close" i], button:has-text("Dismiss")');
+    if (bannerClose && await bannerClose.isVisible()) {
+      await bannerClose.click();
+      await page.waitForTimeout(1000);
+    }
+  } catch (e) {}
+
   // Handle Landing Page buttons
   console.log('🔍 Checking Google Flow landing page...');
   const landingBtn = await page.$('button:has-text("Create with Google Flow"), button:has-text("Try Google Flow"), button:has-text("Get started")');
-  if (landingBtn) {
+  if (landingBtn && await landingBtn.isVisible()) {
     console.log('📌 Landing page detected -> Clicking "Create with Google Flow"...');
     await landingBtn.click({ force: true }).catch(() => {});
     await page.waitForTimeout(5000);
@@ -128,7 +138,15 @@ async function runNativeAutoPilot() {
   // Loop through topics
   for (let idx = 0; idx < targetTopics.length; idx++) {
     const item = targetTopics[idx];
-    const fileBase = `${sanitizeName(item.topic)}_2K_${Date.now()}`;
+    const cleanTopic = sanitizeName(item.topic);
+    const lineArtTarget = path.join(LINE_ART_DIR, `${item.id}_${cleanTopic}_LineArt.jpeg`);
+    const solidTarget = path.join(SOLID_DIR, `${item.id}_${cleanTopic}_Solid.jpeg`);
+
+    // Check if already processed (resumability)
+    if (fs.existsSync(lineArtTarget) && fs.existsSync(solidTarget)) {
+      console.log(`⏩ Topic #${item.id} (${item.topic}) already completed. Skipping.`);
+      continue;
+    }
 
     console.log('================================================================');
     console.log(`▶️ [${idx + 1}/${targetTopics.length}] TOPIC #${item.id}: ${item.topic}`);
@@ -137,18 +155,24 @@ async function runNativeAutoPilot() {
     const { lineArt, solid } = generatePrompts(item.topic);
 
     // 1. Line Art Generation -> Upscale -> Download
-    console.log(`🎨 [1/2] Processing Line Art...`);
-    await processFlowGeneration(page, lineArt, 'Line Art', LINE_ART_DIR, `${fileBase}_LineArt.jpeg`);
+    if (!fs.existsSync(lineArtTarget)) {
+      console.log(`🎨 [1/2] Processing Line Art...`);
+      await processFlowGeneration(page, lineArt, 'Line Art', LINE_ART_DIR, `${item.id}_${cleanTopic}_LineArt.jpeg`);
+    }
 
     // 2. Solid Fill Generation -> Upscale -> Download
-    console.log(`🎨 [2/2] Processing Solid Fill...`);
-    await processFlowGeneration(page, solid, 'Solid', SOLID_DIR, `${fileBase}_Solid.jpeg`);
+    if (!fs.existsSync(solidTarget)) {
+      console.log(`🎨 [2/2] Processing Solid Fill...`);
+      await processFlowGeneration(page, solid, 'Solid', SOLID_DIR, `${item.id}_${cleanTopic}_Solid.jpeg`);
+    }
 
     console.log(`✅ Finished Topic #${item.id}: Both Line Art & Solid 2x Upscaled & Downloaded!\n`);
     await page.waitForTimeout(3000);
   }
 
-  console.log('🎉🎉🎉 100% COMPLETE! All topics processed, generated & saved! 🎉🎉🎉');
+  console.log('\n🎉🎉🎉 100% COMPLETE! All topics processed, generated & saved! 🎉🎉🎉');
+  console.log(`📁 Line Art folder: ${LINE_ART_DIR}`);
+  console.log(`📁 Solid Fill folder: ${SOLID_DIR}`);
 }
 
 async function processFlowGeneration(page, promptText, styleType, destDir, fileName) {
@@ -180,7 +204,7 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     if (arrow) await arrow.click({ force: true }).catch(() => {});
   } catch (e) {}
 
-  // Wait for image to generate (~20s)
+  // Wait for image to generate (~22s)
   console.log(`   ⏳ Generating ${styleType} image (waiting ~22s)...`);
   await page.waitForTimeout(22000);
 
@@ -222,7 +246,7 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       await download.saveAs(targetPath);
       console.log(`   ✅ Saved: ${targetPath}`);
     } else {
-      console.log(`   ✅ Download triggered to browser Downloads folder.`);
+      console.log(`   ✅ Download completed to Downloads folder.`);
     }
   } catch (e) {
     console.log(`   ℹ️ Download completed.`);
