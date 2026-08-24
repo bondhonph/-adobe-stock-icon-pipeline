@@ -36,7 +36,7 @@ export default function DashboardPage() {
   const [isBatchOpen, setIsBatchOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  // Initialize from LocalStorage or empty default
+// Initialize from LocalStorage or empty default
   useEffect(() => {
     try {
       const savedProjects = localStorage.getItem('adobe_icon_projects');
@@ -52,31 +52,31 @@ export default function DashboardPage() {
       }
 
       if (savedProjects) {
-        const parsed = JSON.parse(savedProjects);
-        setProjects(parsed);
+        let parsed: ProjectData[] = JSON.parse(savedProjects);
+        // Force purge any old default-pdf-500 project
+        parsed = parsed.filter((p) => p.id !== 'default-pdf-500');
         if (parsed.length > 0) {
+          setProjects(parsed);
           setCurrentProjectId(parsed[0].id);
-          if (parsed[0].topics.length > 0) {
-            setSelectedTopicId(parsed[0].topics[0].id);
-          } else {
-            setSelectedTopicId(null);
-          }
+          setSelectedTopicId(parsed[0].topics.length > 0 ? parsed[0].topics[0].id : null);
+          localStorage.setItem('adobe_icon_projects', JSON.stringify(parsed));
+          return;
         }
-      } else {
-        // Start 100% blank - No built-in topics!
-        const initialProject: ProjectData = {
-          id: `project-${Date.now()}`,
-          name: 'My Project (Upload PDF)',
-          description: 'Upload your PDF or add topics',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          topics: [],
-        };
-        setProjects([initialProject]);
-        setCurrentProjectId(initialProject.id);
-        setSelectedTopicId(null);
-        localStorage.setItem('adobe_icon_projects', JSON.stringify([initialProject]));
       }
+
+      // Start 100% blank - No built-in topics!
+      const initialProject: ProjectData = {
+        id: `project-${Date.now()}`,
+        name: 'My Project (Upload PDF)',
+        description: 'Upload your PDF or add custom topics',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        topics: [],
+      };
+      setProjects([initialProject]);
+      setCurrentProjectId(initialProject.id);
+      setSelectedTopicId(null);
+      localStorage.setItem('adobe_icon_projects', JSON.stringify([initialProject]));
     } catch (e) {
       console.error('Error loading stored data:', e);
     }
