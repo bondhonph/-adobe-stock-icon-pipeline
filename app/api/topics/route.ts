@@ -3,43 +3,31 @@ import fs from 'fs';
 import path from 'path';
 
 export async function GET() {
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  };
+
   try {
-    const pdfPath = path.join(process.cwd(), '..', 'Icon (1).pdf');
-    if (!fs.existsSync(pdfPath)) {
-      return NextResponse.json({ topics: [] });
+    const jsonPath = path.join(process.cwd(), 'public', 'topics.json');
+    if (fs.existsSync(jsonPath)) {
+      const data = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+      return NextResponse.json({ topics: data, total: data.length }, { headers });
     }
-
-    const dataBuffer = fs.readFileSync(pdfPath);
-    const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.js');
-    const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(dataBuffer) });
-    const pdf = await loadingTask.promise;
-    let fullText = '';
-
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-      const page = await pdf.getPage(pageNum);
-      const content = await page.getTextContent();
-      for (const item of (content.items as any[])) {
-        fullText += item.str + (item.hasEOL ? '\n' : ' ');
-      }
-      fullText += '\n';
-    }
-
-    const regex = /(?:^|\s+)(\d{1,4})[\.\)\-]\s+([\s\S]+?)(?=\s+\d{1,4}[\.\)\-]|$)/g;
-    const matches = [...fullText.matchAll(regex)];
-    const topics: { id: number; topic: string }[] = [];
-    const seen = new Set<number>();
-
-    for (const m of matches) {
-      const id = parseInt(m[1], 10);
-      let title = m[2].replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').replace(/\s*page\s*\d+\s*$/i, '').trim();
-      if (title.length > 1 && !seen.has(id)) {
-        seen.add(id);
-        topics.push({ id, topic: title });
-      }
-    }
-
-    return NextResponse.json({ topics, total: topics.length });
+    return NextResponse.json({ topics: [], total: 0 }, { headers });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message, topics: [] }, { status: 500 });
+    return NextResponse.json({ error: err.message, topics: [] }, { status: 500, headers });
   }
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    },
+  });
 }
