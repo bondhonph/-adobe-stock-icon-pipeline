@@ -173,42 +173,158 @@ async function runAutoPipeline() {
   let context;
   let page;
 
+  // Use dedicated bot profile - sign in once, it remembers forever
   const botProfileDir = path.join(WORKSPACE_DIR, '.chrome-flow-bot-profile');
   if (!fs.existsSync(botProfileDir)) fs.mkdirSync(botProfileDir, { recursive: true });
 
+  console.log('🌐 Launching Google Chrome with Playwright...');
+  console.log(`📂 Bot profile: ${botProfileDir}`);
+  
+  // Kill any existing Chrome to avoid conflicts
   try {
-    console.log('🔌 Connecting to existing Google Chrome session...');
-    const browser = await chromium.connectOverCDP(CONFIG.cdpUrl);
-    const contexts = browser.contexts();
-    context = contexts[0] || (await browser.newContext());
-    const pages = context.pages();
-    page = pages.find(p => p.url().includes('labs.google/fx/tools/flow')) || pages[0] || (await context.newPage());
-  } catch (e) {
-    console.log('🌐 Launching dedicated Google Chrome Automation window...');
-    context = await chromium.launchPersistentContext(botProfileDir, {
-      headless: false,
-      channel: 'chrome',
-      args: [
-        '--start-maximized',
-        '--disable-blink-features=AutomationControlled',
-        '--no-sandbox'
-      ],
-      viewport: null
+    require('child_process').execSync('taskkill /F /IM chrome.exe', { stdio: 'ignore' });
+    await new Promise(r => setTimeout(r, 3000));
+  } catch (e) {}
+
+  context = await chromium.launchPersistentContext(botProfileDir, {
+    headless: false,
+    channel: 'chrome',
+    args: [
+      '--start-maximized',
+      '--disable-blink-features=AutomationControlled',
+      '--no-sandbox',
+      '--no-first-run',
+      '--no-default-browser-check'
+    ],
+    viewport: null,
+    ignoreDefaultArgs: ['--enable-automation']
+  });
+
+  const pages = context.pages();
+  page = pages[0] || (await context.newPage());
+
+  // Navigate to Google Flow
+  console.log(`🔗 Navigating to Google Flow...`);
+  await page.goto(CONFIG.flowUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.waitForTimeout(6000);
+  console.log(`📍 Now on: ${page.url()}`);
+
+  // ===== HANDLE GOOGLE FLOW LANDING PAGE & SIGN-IN =====
+  console.log('🔍 Detecting Google Flow page state...');
+  await page.waitForTimeout(3000);
+
+  // Step A: Click "Try Google Flow" if on landing page
+  const tryFlowBtn = await page.$('button:has-text("Try Google Flow")');
+  if (tryFlowBtn && await tryFlowBtn.isVisible()) {
+    console.log('📌 Landing page detected -> Clicking "Try Google Flow"...');
+    await tryFlowBtn.click({ force: true });
+    await page.waitForTimeout(5000);
+  }
+
+  // Step B: Check if redirected to Google Sign-in
+  if (page.url().includes('accounts.google.com')) {
+    console.log('');
+    console.log('╔══════════════════════════════════════════════════════════════╗');
+    console.log('║  🔐 GOOGLE SIGN-IN REQUIRED (ONE-TIME ONLY)                ║');
+    console.log('║                                                              ║');
+    console.log('║  1. Sign in to your Google account in the Chrome window      ║');
+    console.log('║  2. Complete any consent/permission screens                  ║');
+    console.log('║  3. Bot will detect sign-in and continue automatically      ║');
+    console.log('║                                                              ║');
+    console.log('║  ⏳ Waiting up to 3 minutes...                               ║');
+    console.log('╚══════════════════════════════════════════════════════════════╝');
+    console.log('');
+    
+    // Poll every 3 seconds for up to 3 minutes
+    let signedIn = false;
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      const currentUrl = page.url();
+      if (!currentUrl.includes('accounts.google.com')) {
+        console.log(`✅ Sign-in complete! Redirected to: ${currentUrl.substring(0, 80)}...`);
+        signedIn = true;
+        await page.waitForTimeout(5000);
+        break;
+      }
+      if (i % 10 === 9) {
+        console.log(`   ⏳ Still waiting for sign-in... (${Math.floor((i+1)*3/60)}min ${((i+1)*3)%60}s)`);
+      }
+    }
+    
+    if (!signedIn) {
+      // Last chance: check if a new tab opened with Flow
+      const allPages = context.pages();
+      const flowPage = allPages.find(p => p.url().includes('labs.google'));
+      if (flowPage) {
+        console.log('✅ Found Google Flow in another tab!');
+        page = flowPage;
+        await page.bringToFront();
+        signedIn = true;
+      }
+    }
+
+    if (!signedIn) {
+      console.log('❌ Sign-in timeout. Please run the bot again after signing in.');
+      await context.close();
+      process.exit(1);
+    }
+  }
+
+  // Step C: Click "Get started" if visible (free tier selection)
+  const getStartedBtn = await page.$('button:has-text("Get started")');
+  if (getStartedBtn && await getStartedBtn.isVisible()) {
+    console.log('📌 Clicking "Get started"...');
+    await getStartedBtn.click({ force: true });
+    await page.waitForTimeout(5000);
+  }
+
+  // Step D: Detect if on dashboard or in canvas
+  console.log('⏳ Checking if on Flow Dashboard or inside Project...');
+  console.log(`📍 Current URL: ${page.url()}`);
+  await page.waitForTimeout(3000);
+
+  // If on dashboard, click "+ New project" or open existing project
+  if (!page.url().includes('/project/')) {
+    console.log('📁 Looking for "+ New project" button on dashboard...');
+    
+    // Try evaluate first for custom div/button components
+    const newProjClicked = await page.evaluate(() => {
+      const allEls = Array.from(document.querySelectorAll('button, div, a, span'));
+      const np = allEls.find(el => {
+        const txt = el.textContent?.trim().toLowerCase();
+        return txt === '+ new project' || txt === 'new project' || txt?.includes('new project');
+      });
+      if (np) {
+        np.click();
+        return true;
+      }
+      return false;
     });
-    const pages = context.pages();
-    page = pages[0] || (await context.newPage());
+
+    if (newProjClicked) {
+      console.log('✅ Clicked "+ New project" button!');
+      await page.waitForTimeout(6000);
+    } else {
+      const npSelector = await page.$('button:has-text("New project"), div:has-text("New project"), a[href*="/project/"]');
+      if (npSelector) {
+        await npSelector.click({ force: true }).catch(() => {});
+        console.log('✅ Clicked project selector!');
+        await page.waitForTimeout(6000);
+      }
+    }
   }
 
-  if (!page.url().includes('labs.google/fx/tools/flow')) {
-    console.log(`🔗 Navigating to ${CONFIG.flowUrl}...`);
-    await page.goto(CONFIG.flowUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(4000);
+  // Wait for canvas editor to be ready
+  console.log('⏳ Waiting for Google Flow Canvas & Prompt box...');
+  try {
+    await page.waitForSelector('div[role="textbox"], [contenteditable="true"], textarea, div.ProseMirror, input[type="text"]:not([hidden])', { timeout: 25000 });
+    console.log('\n✅ Google Flow Canvas Ready! Prompt input detected!\n');
+  } catch (e) {
+    console.log('⚠️ Will attempt prompt typing during loop...');
+    await page.screenshot({ path: path.join(WORKSPACE_DIR, 'flow_workspace_debug.png') }).catch(() => {});
   }
 
-  // Handle Google Sign-in or Project Selection in Google Flow
-  await prepareGoogleFlowWorkspace(page);
-
-  console.log('\n✅ Google Flow Workspace Ready! Starting Autonomous Generation Loop...\n');
+  console.log('🚀 Starting Autonomous Generation Loop...\n');
 
   for (const topicItem of targetTopics) {
     const topicId = topicItem.id;

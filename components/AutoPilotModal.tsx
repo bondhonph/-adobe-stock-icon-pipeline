@@ -152,6 +152,44 @@ export const AutoPilotModal: React.FC<AutoPilotModalProps> = ({
 
         {/* Modal Body */}
         <div className="p-6 space-y-5 overflow-y-auto bg-[#090d16]/90">
+          {/* 1-Click In-Browser Bot Option (Recommended for Logged-in Google Flow) */}
+          <div className="p-4 rounded-2xl bg-gradient-to-r from-purple-950/80 via-indigo-950/60 to-slate-900 border border-purple-500/40 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-lg">⚡</span>
+                <div>
+                  <h4 className="font-bold text-xs text-white">Instant In-Browser Auto-Pilot (Zero Sign-in Setup)</h4>
+                  <p className="text-[11px] text-purple-200">Runs directly inside your already-open Google Flow tab with your Google Pro account!</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  const script = `(async()=>{const s=document.createElement('script');s.src='http://localhost:3001/api/bot-script?t='+Date.now();document.body.appendChild(s);})();`;
+                  navigator.clipboard.writeText(script);
+                  alert('✅ In-Browser Auto-Pilot Script Copied! \n\n1. Go to your open Google Flow tab\n2. Press F12 (Console)\n3. Press Ctrl+V (Paste) and Enter\n\nA floating Auto-Pilot HUD will appear right on Google Flow!');
+                }}
+                className="px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-cyan-500/20 flex items-center gap-1.5 transition transform hover:scale-105"
+              >
+                <span>📋</span> Copy 1-Click Script
+              </button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 pt-1 text-[11px]">
+              <div className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800">
+                <span className="font-bold text-cyan-400 block mb-0.5">1. Open Google Flow</span>
+                <span className="text-slate-400">In your Chrome where you are signed in</span>
+              </div>
+              <div className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800">
+                <span className="font-bold text-purple-400 block mb-0.5">2. Press F12</span>
+                <span className="text-slate-400">Go to Console & paste (Ctrl+V) & Enter</span>
+              </div>
+              <div className="bg-slate-950/70 p-2.5 rounded-xl border border-slate-800">
+                <span className="font-bold text-emerald-400 block mb-0.5">3. Click START</span>
+                <span className="text-slate-400">Watch it generate, 2x upscale & download!</span>
+              </div>
+            </div>
+          </div>
+
           {/* Range Configuration */}
           <div className="bg-slate-900/80 p-4 rounded-2xl border border-slate-800 flex flex-wrap items-center justify-between gap-4">
             <div>
@@ -229,7 +267,7 @@ export const AutoPilotModal: React.FC<AutoPilotModalProps> = ({
               <span className="text-[10px] font-mono text-slate-500">Real-time Stream</span>
             </div>
 
-            <div className="h-52 bg-[#050811] rounded-2xl border border-slate-800 p-4 font-mono text-[11px] overflow-y-auto space-y-1 text-slate-300 shadow-inner">
+            <div className="h-44 bg-[#050811] rounded-2xl border border-slate-800 p-4 font-mono text-[11px] overflow-y-auto space-y-1 text-slate-300 shadow-inner">
               {logs.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-slate-600 text-xs">
                   <span>Press "START 100% FULL AUTO-PILOT" to begin unattended generation.</span>
@@ -259,30 +297,20 @@ export const AutoPilotModal: React.FC<AutoPilotModalProps> = ({
             {botStatus !== 'running' ? (
               <button
                 onClick={handleStart}
-                className="w-full py-4 rounded-2xl bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-500 hover:from-purple-500 hover:to-cyan-400 text-white font-extrabold text-sm shadow-xl shadow-purple-600/30 flex items-center justify-center gap-2.5 transition transform hover:scale-[1.01]"
+                className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-500 hover:from-purple-500 hover:to-cyan-400 text-white font-extrabold text-sm shadow-xl shadow-purple-600/30 flex items-center justify-center gap-2.5 transition transform hover:scale-[1.01]"
               >
                 <Play className="h-5 w-5 fill-current" />
-                <span>START 100% FULL AUTO-PILOT (Topics #{startId} to #{endId})</span>
+                <span>START BACKGROUND BOT (Topics #{startId} to #{endId})</span>
               </button>
             ) : (
               <button
                 onClick={handleStop}
-                className="w-full py-4 rounded-2xl bg-red-600 hover:bg-red-500 text-white font-extrabold text-sm shadow-xl shadow-red-600/30 flex items-center justify-center gap-2.5 transition"
+                className="w-full py-3.5 rounded-2xl bg-red-600 hover:bg-red-500 text-white font-extrabold text-sm shadow-xl shadow-red-600/30 flex items-center justify-center gap-2.5 transition"
               >
                 <Square className="h-5 w-5 fill-current" />
-                <span>STOP AUTO-PILOT RUN</span>
+                <span>STOP BACKGROUND BOT</span>
               </button>
             )}
-          </div>
-
-          {/* Local Batch Launcher Alternative Note */}
-          <div className="p-3.5 rounded-xl bg-slate-900/70 border border-slate-800 text-xs text-slate-300 space-y-1">
-            <span className="font-semibold text-purple-300 flex items-center gap-1">
-              <Terminal className="h-3.5 w-3.5 text-cyan-400" /> Direct Local 1-Click File:
-            </span>
-            <p className="text-[11px] text-slate-400">
-              You can also double-click <code className="text-cyan-300 font-mono bg-slate-950 px-1 py-0.5 rounded">START_AUTO_PIPELINE.bat</code> in your workspace folder anytime to run without opening any browser dashboard.
-            </p>
           </div>
         </div>
       </div>
