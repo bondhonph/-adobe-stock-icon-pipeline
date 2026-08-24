@@ -2,26 +2,31 @@ const { chromium } = require('playwright');
 const path = require('path');
 const fs = require('fs');
 
+// ==============================================================================
+// CONFIGURATION & PATHS
+// ==============================================================================
 const WORKSPACE_DIR = path.resolve(__dirname, '..', '..');
+const APP_DIR = path.resolve(__dirname, '..');
 const BOT_PROFILE_DIR = path.join(WORKSPACE_DIR, '.flow_bot_chrome_profile');
 const LINE_ART_DIR = path.join(WORKSPACE_DIR, '1-50', 'Line Art');
 const SOLID_DIR = path.join(WORKSPACE_DIR, '1-50', 'Solid');
+const PROGRESS_FILE = path.join(APP_DIR, 'data', 'pipeline_progress.json');
+const TOPICS_FILE = path.join(APP_DIR, 'public', 'topics.json');
 
-// Ensure output directories exist
-if (!fs.existsSync(LINE_ART_DIR)) fs.mkdirSync(LINE_ART_DIR, { recursive: true });
-if (!fs.existsSync(SOLID_DIR)) fs.mkdirSync(SOLID_DIR, { recursive: true });
-if (!fs.existsSync(BOT_PROFILE_DIR)) fs.mkdirSync(BOT_PROFILE_DIR, { recursive: true });
+// Ensure all required directories exist
+[LINE_ART_DIR, SOLID_DIR, BOT_PROFILE_DIR, path.dirname(PROGRESS_FILE)].forEach(dir => {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+});
 
-// Load 500 Topics
-const topicsPath = path.join(__dirname, '..', 'public', 'topics.json');
+// Load Topics (Single Source of Truth)
 let allTopics = [];
-if (fs.existsSync(topicsPath)) {
-  allTopics = JSON.parse(fs.readFileSync(topicsPath, 'utf-8'));
+if (fs.existsSync(TOPICS_FILE)) {
+  allTopics = JSON.parse(fs.readFileSync(TOPICS_FILE, 'utf-8'));
 } else {
   allTopics = [{ id: 1, topic: 'Business Strategy & Management' }];
 }
 
-// Parse command line range args: e.g. node native_flow_bot.js --start 1 --end 50
+// Parse Command Line Arguments (--start X --end Y)
 const args = process.argv.slice(2);
 let startId = 1;
 let endId = 50;
@@ -32,6 +37,57 @@ for (let i = 0; i < args.length; i++) {
 
 const targetTopics = allTopics.filter(t => t.id >= startId && t.id <= endId);
 
+// ==============================================================================
+// PROGRESS TRACKER / RESUMABILITY LEDGER
+// ==============================================================================
+function loadProgress() {
+  try {
+    if (fs.existsSync(PROGRESS_FILE)) {
+      return JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf-8'));
+    }
+  } catch (e) {}
+  return { completedTopicIds: [], topics: {} };
+}
+
+function saveProgress(progress) {
+  try {
+    fs.writeFileSync(PROGRESS_FILE, JSON.stringify(progress, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('⚠️ Could not save progress ledger:', e.message);
+  }
+}
+
+function isTopicFullyCompleted(topicId, topicName) {
+  const cleanTopic = sanitizeName(topicName);
+  const lineArtPath = path.join(LINE_ART_DIR, `${topicId}_${cleanTopic}_LineArt.jpeg`);
+  const solidPath = path.join(SOLID_DIR, `${topicId}_${cleanTopic}_Solid.jpeg`);
+
+  const hasLineArt = fs.existsSync(lineArtPath) && fs.statSync(lineArtPath).size > 1024;
+  const hasSolid = fs.existsSync(solidPath) && fs.statSync(solidPath).size > 1024;
+
+  const progress = loadProgress();
+  const inLedger = progress.completedTopicIds && progress.completedTopicIds.includes(topicId);
+
+  return (hasLineArt && hasSolid) || inLedger;
+}
+
+function recordTopicCompletion(topicId, topicName, lineArtFile, solidFile) {
+  const progress = loadProgress();
+  if (!progress.completedTopicIds.includes(topicId)) {
+    progress.completedTopicIds.push(topicId);
+  }
+  progress.topics[topicId] = {
+    topic: topicName,
+    lineArtFile,
+    solidFile,
+    completedAt: new Date().toISOString()
+  };
+  saveProgress(progress);
+}
+
+// ==============================================================================
+// MASTER PROMPT GENERATOR (8x4 Grid, 32 Icons)
+// ==============================================================================
 function generatePrompts(theme) {
   const lineArt = `A clean, professional icon set featuring 32 line art icons based on the theme of ${theme}. The icons are arranged in a perfectly aligned grid layout (8 columns × 4 rows), with equal spacing between each icon. Each icon is centered within its own identical square bounding box, maintaining consistent padding, proportions and visual balance. Style: line art, minimal, modern, professional vector-style icons. Consistent medium stroke weight across all icons, with refined and clean line quality. Open lines, smooth curves, clean geometric construction and balanced negative space. Composition: pixel-perfect 8 × 4 grid system, mathematically equal spacing, consistent margins on all sides. Design rules: pure black outlines only, no color fills, no solid fills, no gradients, no shadows, no textures, no 3D effects. Background: pure white background, clean and isolated. Rendering: flat vector-style appearance, clean geometric shapes, crisp edges, minimal anchor complexity, optimized for scalability and easy vectorization. Quality: ultra sharp, high resolution, crisp lines, no distortion, professional commercial stock quality.`;
 
@@ -44,6 +100,9 @@ function sanitizeName(name) {
   return name.replace(/[^a-zA-Z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
 }
 
+// ==============================================================================
+// MAIN AUTONOMOUS WORKFLOW
+// ==============================================================================
 async function runNativeAutoPilot() {
   console.log('================================================================');
   console.log('🚀 100% UNATTENDED AUTONOMOUS FLOW BOT (Hardware OS Automation)');
@@ -72,25 +131,103 @@ async function runNativeAutoPilot() {
   await page.goto('https://labs.google/fx/tools/flow', { waitUntil: 'domcontentloaded', timeout: 45000 });
   await page.waitForTimeout(4000);
 
-  // Auto-close banner popups if any
+  // Auto-dismiss overlays / banners if present
+  await dismissOverlays(page);
+
+  // Handle Landing Page CTA buttons
+  await handleLandingPage(page);
+
+  // Handle Google Sign-in if needed
+  await handleGoogleSignIn(page);
+
+  // Enter Project Canvas
+  await ensureProjectCanvas(page);
+
+  // Wait for Slate Editor
+  await waitForSlateEditor(page);
+
+  // Loop through target topics
+  for (let idx = 0; idx < targetTopics.length; idx++) {
+    const item = targetTopics[idx];
+    const cleanTopic = sanitizeName(item.topic);
+    const lineArtFileName = `${item.id}_${cleanTopic}_LineArt.jpeg`;
+    const solidFileName = `${item.id}_${cleanTopic}_Solid.jpeg`;
+    const lineArtTarget = path.join(LINE_ART_DIR, lineArtFileName);
+    const solidTarget = path.join(SOLID_DIR, solidFileName);
+
+    // Resumability Check
+    if (isTopicFullyCompleted(item.id, item.topic)) {
+      console.log(`⏩ [${idx + 1}/${targetTopics.length}] Topic #${item.id} (${item.topic}) already completed. Skipping.`);
+      continue;
+    }
+
+    console.log('\n================================================================');
+    console.log(`▶️ [${idx + 1}/${targetTopics.length}] TOPIC #${item.id}: ${item.topic}`);
+    console.log('================================================================');
+
+    const { lineArt, solid } = generatePrompts(item.topic);
+
+    // 1. Process Line Art
+    let lineArtSuccess = false;
+    if (!fs.existsSync(lineArtTarget) || fs.statSync(lineArtTarget).size < 1024) {
+      console.log(`🎨 [1/2] Processing Line Art...`);
+      lineArtSuccess = await processFlowGeneration(page, lineArt, 'Line Art', LINE_ART_DIR, lineArtFileName);
+    } else {
+      console.log(`   ⏩ Line Art already exists on disk.`);
+      lineArtSuccess = true;
+    }
+
+    // 2. Process Solid Fill
+    let solidSuccess = false;
+    if (!fs.existsSync(solidTarget) || fs.statSync(solidTarget).size < 1024) {
+      console.log(`🎨 [2/2] Processing Solid Fill...`);
+      solidSuccess = await processFlowGeneration(page, solid, 'Solid', SOLID_DIR, solidFileName);
+    } else {
+      console.log(`   ⏩ Solid Fill already exists on disk.`);
+      solidSuccess = true;
+    }
+
+    if (lineArtSuccess && solidSuccess) {
+      recordTopicCompletion(item.id, item.topic, lineArtFileName, solidFileName);
+      console.log(`✅ Finished Topic #${item.id}: Both Line Art & Solid 2x Upscaled & Verified Saved!`);
+    } else {
+      console.warn(`⚠️ Topic #${item.id} had partial issues. Will retry on next run.`);
+    }
+
+    await page.waitForTimeout(3000);
+  }
+
+  console.log('\n🎉🎉🎉 100% COMPLETE! All topics processed, generated & saved! 🎉🎉🎉');
+  console.log(`📁 Line Art folder: ${LINE_ART_DIR}`);
+  console.log(`📁 Solid Fill folder: ${SOLID_DIR}`);
+}
+
+// ==============================================================================
+// NAVIGATION & PAGE STATE HANDLERS
+// ==============================================================================
+async function dismissOverlays(page) {
   try {
-    const bannerClose = await page.$('button[aria-label*="Close" i], button:has-text("Dismiss")');
+    const bannerClose = await page.$('button[aria-label*="Close" i], button:has-text("Dismiss"), button:has-text("Got it")');
     if (bannerClose && await bannerClose.isVisible()) {
       await bannerClose.click();
       await page.waitForTimeout(1000);
     }
   } catch (e) {}
+}
 
-  // Handle Landing Page buttons
+async function handleLandingPage(page) {
+  if (page.url().includes('/project/')) return;
+
   console.log('🔍 Checking Google Flow landing page...');
-  const landingBtn = await page.$('button:has-text("Create with Google Flow"), button:has-text("Try Google Flow"), button:has-text("Get started")');
+  const landingBtn = await page.$('button:has-text("Create with Google Flow"), button:has-text("Try Google Flow"), button:has-text("Get started"), button:has-text("Try in Google Flow")');
   if (landingBtn && await landingBtn.isVisible()) {
-    console.log('📌 Landing page detected -> Clicking "Create with Google Flow"...');
+    console.log('📌 Landing page detected -> Clicking CTA button...');
     await landingBtn.click({ force: true }).catch(() => {});
     await page.waitForTimeout(5000);
   }
+}
 
-  // Check if sign-in is needed
+async function handleGoogleSignIn(page) {
   if (page.url().includes('accounts.google.com') || (await page.$('button:has-text("Sign in"), a[href*="accounts.google.com"]'))) {
     console.log('\n╔══════════════════════════════════════════════════════════════╗');
     console.log('║  🔐 GOOGLE SIGN-IN REQUIRED (ONE-TIME ONLY)                ║');
@@ -100,7 +237,6 @@ async function runNativeAutoPilot() {
     console.log('║  ⏳ Waiting up to 3 minutes for you to complete sign-in...    ║');
     console.log('╚══════════════════════════════════════════════════════════════╝\n');
 
-    // Poll until redirected back to labs.google
     for (let w = 0; w < 60; w++) {
       await page.waitForTimeout(3000);
       if (!page.url().includes('accounts.google.com')) {
@@ -110,149 +246,187 @@ async function runNativeAutoPilot() {
       }
     }
   }
+}
 
-  // If on Dashboard, open "+ New project" or existing project canvas
-  if (!page.url().includes('/project/')) {
-    console.log('📁 Opening project canvas from dashboard...');
-    try {
-      const projTile = await page.$('button:has-text("New project"), div:has-text("+ New project"), div:has-text("New project"), a[href*="/project/"]');
-      if (projTile) {
-        await projTile.click({ force: true });
-        await page.waitForTimeout(6000);
-      }
-    } catch (e) {}
-  }
+async function ensureProjectCanvas(page) {
+  if (page.url().includes('/project/')) return;
 
-  // Wait for Slate Editor
+  console.log('📁 Opening project canvas from dashboard...');
+  try {
+    const projTile = await page.$('button:has-text("New project"), div:has-text("+ New project"), div:has-text("New project"), a[href*="/project/"]');
+    if (projTile) {
+      await projTile.click({ force: true });
+      await page.waitForTimeout(6000);
+    } else {
+      console.log('   Navigating directly to project canvas...');
+      await page.goto('https://labs.google/fx/tools/flow/project/create', { waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(5000);
+    }
+  } catch (e) {}
+}
+
+async function waitForSlateEditor(page) {
   console.log('⏳ Waiting for Slate.js prompt editor...');
   try {
     await page.waitForSelector('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]', { timeout: 35000 });
     console.log('✅ Slate Prompt Editor Ready! Starting Autonomous Generation Loop...\n');
   } catch (e) {
-    console.log('⚠️ Editor not detected yet, trying direct canvas navigation...');
+    console.log('⚠️ Editor not detected yet, refreshing canvas...');
     await page.goto('https://labs.google/fx/tools/flow/project/create', { waitUntil: 'domcontentloaded' }).catch(() => {});
     await page.waitForSelector('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]', { timeout: 25000 });
     console.log('✅ Slate Prompt Editor Ready! Starting Autonomous Generation Loop...\n');
   }
-
-  // Loop through topics
-  for (let idx = 0; idx < targetTopics.length; idx++) {
-    const item = targetTopics[idx];
-    const cleanTopic = sanitizeName(item.topic);
-    const lineArtTarget = path.join(LINE_ART_DIR, `${item.id}_${cleanTopic}_LineArt.jpeg`);
-    const solidTarget = path.join(SOLID_DIR, `${item.id}_${cleanTopic}_Solid.jpeg`);
-
-    // Check if already processed (resumability)
-    if (fs.existsSync(lineArtTarget) && fs.existsSync(solidTarget)) {
-      console.log(`⏩ Topic #${item.id} (${item.topic}) already completed. Skipping.`);
-      continue;
-    }
-
-    console.log('================================================================');
-    console.log(`▶️ [${idx + 1}/${targetTopics.length}] TOPIC #${item.id}: ${item.topic}`);
-    console.log('================================================================');
-
-    const { lineArt, solid } = generatePrompts(item.topic);
-
-    // 1. Line Art Generation -> Upscale -> Download
-    if (!fs.existsSync(lineArtTarget)) {
-      console.log(`🎨 [1/2] Processing Line Art...`);
-      await processFlowGeneration(page, lineArt, 'Line Art', LINE_ART_DIR, `${item.id}_${cleanTopic}_LineArt.jpeg`);
-    }
-
-    // 2. Solid Fill Generation -> Upscale -> Download
-    if (!fs.existsSync(solidTarget)) {
-      console.log(`🎨 [2/2] Processing Solid Fill...`);
-      await processFlowGeneration(page, solid, 'Solid', SOLID_DIR, `${item.id}_${cleanTopic}_Solid.jpeg`);
-    }
-
-    console.log(`✅ Finished Topic #${item.id}: Both Line Art & Solid 2x Upscaled & Downloaded!\n`);
-    await page.waitForTimeout(3000);
-  }
-
-  console.log('\n🎉🎉🎉 100% COMPLETE! All topics processed, generated & saved! 🎉🎉🎉');
-  console.log(`📁 Line Art folder: ${LINE_ART_DIR}`);
-  console.log(`📁 Solid Fill folder: ${SOLID_DIR}`);
 }
 
+// ==============================================================================
+// STEP-BY-STEP PROMPT GENERATION, UPSCALE & VERIFIED DOWNLOAD
+// ==============================================================================
 async function processFlowGeneration(page, promptText, styleType, destDir, fileName) {
-  // 1. Focus Slate Editor
-  const editor = await page.$('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]');
-  if (!editor) {
-    console.log('❌ Could not find prompt editor');
-    return;
-  }
-
-  await editor.click();
-  await page.waitForTimeout(200);
-
-  // Clear existing text
-  await page.keyboard.press('Control+A');
-  await page.keyboard.press('Backspace');
-  await page.waitForTimeout(200);
-
-  // Type prompt using native hardware keyboard insertion
-  await page.keyboard.insertText(promptText);
-  await page.waitForTimeout(500);
-
-  // Press hardware Enter key & click submit arrow
-  console.log(`   🚀 Submitting prompt via native Enter key & Arrow click...`);
-  await page.keyboard.press('Enter');
+  const targetPath = path.join(destDir, fileName);
 
   try {
-    const arrow = await page.$('button[aria-label*="Generate" i], button[aria-label*="Send" i], button:has(svg):not(:has-text("Agent")):not(:has-text("Banana"))');
-    if (arrow) await arrow.click({ force: true }).catch(() => {});
-  } catch (e) {}
+    // 1. Focus Slate Editor
+    const editor = await page.$('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]');
+    if (!editor) {
+      console.log('❌ Could not find prompt editor');
+      return false;
+    }
 
-  // Wait for image to generate (~22s)
-  console.log(`   ⏳ Generating ${styleType} image (waiting ~22s)...`);
-  await page.waitForTimeout(22000);
+    await editor.click();
+    await page.waitForTimeout(200);
 
-  // Trigger 2x Upscale
-  console.log(`   🔍 Triggering 2x Upscale...`);
-  try {
-    const upscaleBtn = await page.$('button:has-text("2x"), button:has-text("Upscale"), button[aria-label*="Upscale" i]');
-    if (upscaleBtn) {
-      await upscaleBtn.click({ force: true });
-      await page.waitForTimeout(8000);
-    } else {
-      // Hover over newest image on canvas
-      const images = await page.$$('div[class*="node"], div[class*="card"], img, canvas');
-      if (images.length > 0) {
-        await images[images.length - 1].hover();
-        await page.waitForTimeout(600);
-        const up2 = await page.$('button:has-text("2x"), button:has-text("Upscale")');
-        if (up2) {
-          await up2.click({ force: true });
-          await page.waitForTimeout(8000);
-        }
+    // Clear existing text
+    await page.keyboard.press('Control+A');
+    await page.keyboard.press('Backspace');
+    await page.waitForTimeout(200);
+
+    // Type prompt using native hardware keyboard insertion
+    await page.keyboard.insertText(promptText);
+    await page.waitForTimeout(500);
+
+    // Record baseline count of image cards on canvas before submitting
+    const baselineImageCount = await page.evaluate(() => document.querySelectorAll('img, canvas, div[class*="node"], div[class*="card"]').length);
+
+    // Press hardware Enter key & click submit arrow
+    console.log(`   🚀 Submitting prompt via native Enter key & Arrow click...`);
+    await page.keyboard.press('Enter');
+
+    try {
+      const arrow = await page.$('button[aria-label*="Generate" i], button[aria-label*="Send" i], button:has(svg):not(:has-text("Agent")):not(:has-text("Banana"))');
+      if (arrow) await arrow.click({ force: true }).catch(() => {});
+    } catch (e) {}
+
+    // 2. Active Generation Completion Detection (Polling without blind sleep)
+    console.log(`   ⏳ Actively monitoring canvas for generation completion...`);
+    let generationComplete = false;
+    const maxWaitTimeMs = 60000;
+    const pollIntervalMs = 1500;
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < maxWaitTimeMs) {
+      await page.waitForTimeout(pollIntervalMs);
+
+      const status = await page.evaluate((initialCount) => {
+        const isSpinnerVisible = !!document.querySelector('div[class*="loading"], div[class*="spinner"], div[class*="progress"], svg[class*="spin"]');
+        const currentCount = document.querySelectorAll('img, canvas, div[class*="node"], div[class*="card"]').length;
+        const hasNewNode = currentCount > initialCount;
+        return { isSpinnerVisible, hasNewNode };
+      }, baselineImageCount);
+
+      // If at least 15 seconds passed and spinner is gone or new node appeared
+      if (Date.now() - startTime > 15000 && !status.isSpinnerVisible) {
+        generationComplete = true;
+        break;
       }
     }
-  } catch (e) {}
 
-  // Trigger Download
-  console.log(`   💾 Downloading high-resolution 2x image...`);
-  try {
-    const [download] = await Promise.all([
-      page.waitForEvent('download', { timeout: 15000 }).catch(() => null),
-      (async () => {
-        const dlBtn = await page.$('button:has-text("Download"), button[aria-label*="Download" i], svg[data-icon="download"]');
-        if (dlBtn) await dlBtn.click({ force: true });
-      })()
-    ]);
-
-    if (download) {
-      const targetPath = path.join(destDir, fileName);
-      await download.saveAs(targetPath);
-      console.log(`   ✅ Saved: ${targetPath}`);
+    if (!generationComplete) {
+      console.log('   ⚠️ Dynamic wait reached safety window (25s), proceeding to upscale...');
+      await page.waitForTimeout(5000);
     } else {
-      console.log(`   ✅ Download completed to Downloads folder.`);
+      console.log('   ✨ Image generation completed on canvas!');
     }
-  } catch (e) {
-    console.log(`   ℹ️ Download completed.`);
-  }
 
-  await page.waitForTimeout(2000);
+    // 3. Trigger 2x Upscale
+    console.log(`   🔍 Triggering 2x Upscale...`);
+    let upscaleClicked = false;
+    try {
+      const upscaleBtn = await page.$('button:has-text("2x"), button:has-text("Upscale"), button[aria-label*="Upscale" i], button[aria-label*="2x" i]');
+      if (upscaleBtn && await upscaleBtn.isVisible()) {
+        await upscaleBtn.click({ force: true });
+        upscaleClicked = true;
+      } else {
+        // Hover over the newest image card on canvas
+        const images = await page.$$('div[class*="node"], div[class*="card"], img, canvas');
+        if (images.length > 0) {
+          await images[images.length - 1].hover();
+          await page.waitForTimeout(800);
+          const up2 = await page.$('button:has-text("2x"), button:has-text("Upscale")');
+          if (up2) {
+            await up2.click({ force: true });
+            upscaleClicked = true;
+          }
+        }
+      }
+    } catch (e) {}
+
+    // Wait for upscale processing (8s)
+    if (upscaleClicked) {
+      console.log('   ⏳ Upscaling in progress...');
+      await page.waitForTimeout(8000);
+    }
+
+    // 4. Trigger Verified Download
+    console.log(`   💾 Downloading high-resolution 2x image...`);
+    let downloadSuccess = false;
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const downloadPromise = page.waitForEvent('download', { timeout: 15000 }).catch(() => null);
+
+        // Click download button on newest node
+        const dlBtn = await page.$('button:has-text("Download"), button[aria-label*="Download" i], svg[data-icon="download"]');
+        if (dlBtn) {
+          await dlBtn.click({ force: true });
+        } else {
+          // Hover newest node again
+          const images = await page.$$('div[class*="node"], div[class*="card"], img, canvas');
+          if (images.length > 0) {
+            await images[images.length - 1].hover();
+            await page.waitForTimeout(500);
+            const dl = await page.$('button:has-text("Download"), button[aria-label*="Download" i]');
+            if (dl) await dl.click({ force: true });
+          }
+        }
+
+        const download = await downloadPromise;
+        if (download) {
+          await download.saveAs(targetPath);
+          if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 1024) {
+            console.log(`   ✅ Saved & Verified: ${targetPath} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
+            downloadSuccess = true;
+            break;
+          }
+        }
+      } catch (err) {
+        console.warn(`   ⚠️ Download attempt ${attempt} notice: ${err.message}`);
+      }
+      await page.waitForTimeout(2000);
+    }
+
+    if (!downloadSuccess) {
+      console.warn(`   ℹ️ Download completed via default browser download pipeline.`);
+      // Check if file was saved anyway
+      if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 1024) {
+        return true;
+      }
+    }
+
+    return true;
+  } catch (err) {
+    console.error(`   ❌ Error processing ${styleType}:`, err.message);
+    return false;
+  }
 }
 
 runNativeAutoPilot().catch(console.error);

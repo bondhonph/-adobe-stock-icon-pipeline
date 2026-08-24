@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "bot": "node scripts/flow_bot.js"
+    "bot": "node scripts/native_flow_bot.js"
   },
   "dependencies": {
     "clsx": "^2.1.1",
