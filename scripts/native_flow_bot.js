@@ -347,51 +347,75 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       console.log('   ✨ Image generation completed on canvas!');
     }
 
-    // 3. Trigger Download: Click Download Icon -> Then Click "2x" in dropdown menu
-    console.log(`   💾 Opening Download Menu (Clicking Download icon)...`);
+    // 3. Trigger Download: Click 3-dot Menu (⋮) -> Click Download -> Click 2x
+    console.log(`   💾 Accessing image options (Looking for 3-dot menu ⋮)...`);
     
-    // Hover over the newest image card on canvas to reveal toolbar
+    // Set up download event listener BEFORE clicking menu items
+    const downloadPromise = page.waitForEvent('download', { timeout: 35000 }).catch(() => null);
+
+    // Hover over the newest image card on canvas to reveal toolbar/menu buttons
     const cards = await page.$$('div[class*="node"], div[class*="card"], img, canvas');
     if (cards.length > 0) {
-      await cards[cards.length - 1].hover();
+      const latestCard = cards[cards.length - 1];
+      await latestCard.hover();
+      await latestCard.click(); // ensure selected
       await page.waitForTimeout(600);
     }
 
-    // Set up download event listener BEFORE clicking
-    const downloadPromise = page.waitForEvent('download', { timeout: 35000 }).catch(() => null);
-
-    // Find and click the Download icon button
-    const downloadIconSelectors = [
+    // Step A: Find and click the 3-dot button (⋮ / ... / More options) or Download button
+    const menuBtnSelectors = [
+      'button[aria-label*="More" i]',
+      'button[aria-label*="Options" i]',
+      'button[aria-label*="Menu" i]',
+      'button:has-text("⋮")',
+      'button:has-text("...")',
       'button[aria-label*="Download" i]',
       'button:has(svg[data-icon="download"])',
-      'button:has(svg):has-text("Download")',
-      'button:has-text("Download")',
-      '[data-testid*="download" i]'
+      'div[class*="node"] button'
     ];
 
-    let dlIcon = null;
-    for (const sel of downloadIconSelectors) {
+    let menuOpened = false;
+    for (const sel of menuBtnSelectors) {
       try {
-        const el = await page.$(sel);
-        if (el && await el.isVisible()) {
-          dlIcon = el;
+        const buttons = await page.$$(sel);
+        for (const btn of buttons) {
+          if (await btn.isVisible()) {
+            console.log(`   📌 Clicking image menu button (${sel})...`);
+            await btn.click({ force: true });
+            menuOpened = true;
+            await page.waitForTimeout(800);
+            break;
+          }
+        }
+        if (menuOpened) break;
+      } catch (e) {}
+    }
+
+    // Step B: Look for and click "Download" item in the opened menu
+    console.log(`   🔍 Looking for "Download" option in menu...`);
+    const downloadItemSelectors = [
+      'div[role="menuitem"]:has-text("Download")',
+      'button:has-text("Download")',
+      'div:has-text("Download")',
+      'span:has-text("Download")',
+      'a:has-text("Download")',
+      'li:has-text("Download")'
+    ];
+
+    for (const sel of downloadItemSelectors) {
+      try {
+        const item = await page.$(sel);
+        if (item && await item.isVisible()) {
+          console.log(`   📌 Clicked "Download" menu item!`);
+          await item.hover();
+          await item.click({ force: true });
+          await page.waitForTimeout(800);
           break;
         }
       } catch (e) {}
     }
 
-    if (!dlIcon && cards.length > 0) {
-      const lastCard = cards[cards.length - 1];
-      dlIcon = await lastCard.$('button');
-    }
-
-    if (dlIcon) {
-      console.log(`   📌 Clicked Download icon, waiting for dropdown menu...`);
-      await dlIcon.click({ force: true });
-      await page.waitForTimeout(1000);
-    }
-
-    // Now click the "2x" option inside the dropdown menu
+    // Step C: Now click the "2x" option (in the resolution sub-menu or modal)
     console.log(`   🔍 Selecting "2x" resolution option...`);
     const twoXSelectors = [
       'div[role="menuitem"]:has-text("2x")',
@@ -419,7 +443,7 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     }
 
     if (!twoXClicked) {
-      // Fallback: evaluate click on element containing "2x"
+      // Fallback: evaluate click on any element containing "2x" or "Download"
       const clicked = await page.evaluate(() => {
         const items = Array.from(document.querySelectorAll('div, span, button, li, a'));
         const item2x = items.find(el => {
