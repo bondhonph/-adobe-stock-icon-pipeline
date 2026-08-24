@@ -66,19 +66,30 @@ export default function DashboardPage() {
         }
       }
 
-      // Start 100% blank - No built-in topics!
-      const initialProject: ProjectData = {
-        id: `project-${Date.now()}`,
-        name: 'My Project (Upload PDF)',
-        description: 'Upload your PDF or add custom topics',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        topics: [],
-      };
-      setProjects([initialProject]);
-      setCurrentProjectId(initialProject.id);
-      setSelectedTopicId(null);
-      localStorage.setItem('adobe_icon_projects', JSON.stringify([initialProject]));
+      // Load the 500 extracted topics from PDF automatically
+      fetch('/api/topics')
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.topics && data.topics.length > 0) {
+            const initialProject: ProjectData = {
+              id: `pdf-topics-500`,
+              name: 'Icon (1).pdf (500 Topics)',
+              description: 'Extracted 500 topics from your PDF',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              topics: data.topics.map((t: any) => ({
+                id: t.id,
+                topic: t.topic,
+                status: 'pending'
+              })),
+            };
+            setProjects([initialProject]);
+            setCurrentProjectId(initialProject.id);
+            setSelectedTopicId(1);
+            localStorage.setItem('adobe_icon_projects', JSON.stringify([initialProject]));
+          }
+        })
+        .catch(() => {});
     } catch (e) {
       console.error('Error loading stored data:', e);
     }
