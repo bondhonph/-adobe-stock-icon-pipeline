@@ -71,32 +71,59 @@ async function runNativeAutoPilot() {
   await page.goto('https://labs.google/fx/tools/flow', { waitUntil: 'domcontentloaded', timeout: 45000 });
   await page.waitForTimeout(4000);
 
+  // Handle Landing Page buttons
+  console.log('🔍 Checking Google Flow landing page...');
+  const landingBtn = await page.$('button:has-text("Create with Google Flow"), button:has-text("Try Google Flow"), button:has-text("Get started")');
+  if (landingBtn) {
+    console.log('📌 Landing page detected -> Clicking "Create with Google Flow"...');
+    await landingBtn.click({ force: true }).catch(() => {});
+    await page.waitForTimeout(5000);
+  }
+
   // Check if sign-in is needed
   if (page.url().includes('accounts.google.com') || (await page.$('button:has-text("Sign in"), a[href*="accounts.google.com"]'))) {
-    console.log('\n⚠️ Please SIGN IN to your Google Account in the opened Chrome window.');
-    console.log('⏳ Waiting for sign in (once logged in, it will remember forever)...');
-    try {
-      await page.waitForSelector('button:has-text("New project"), div[role="textbox"], [contenteditable="true"]', { timeout: 180000 });
-      console.log('✅ Sign-in detected!\n');
-    } catch (e) {}
+    console.log('\n╔══════════════════════════════════════════════════════════════╗');
+    console.log('║  🔐 GOOGLE SIGN-IN REQUIRED (ONE-TIME ONLY)                ║');
+    console.log('║                                                              ║');
+    console.log('║  Please sign in to your Google Account in the Chrome window. ║');
+    console.log('║  Once signed in, the bot profile saves your login forever!   ║');
+    console.log('║  ⏳ Waiting up to 3 minutes for you to complete sign-in...    ║');
+    console.log('╚══════════════════════════════════════════════════════════════╝\n');
+
+    // Poll until redirected back to labs.google
+    for (let w = 0; w < 60; w++) {
+      await page.waitForTimeout(3000);
+      if (!page.url().includes('accounts.google.com')) {
+        console.log('✅ Google Sign-in complete! Proceeding to workspace...');
+        await page.waitForTimeout(4000);
+        break;
+      }
+    }
   }
 
   // If on Dashboard, open "+ New project" or existing project canvas
   if (!page.url().includes('/project/')) {
-    console.log('📁 Entering Google Flow canvas...');
+    console.log('📁 Opening project canvas from dashboard...');
     try {
-      const newProj = await page.$('button:has-text("New project"), div:has-text("New project"), a[href*="/project/"]');
-      if (newProj) {
-        await newProj.click();
-        await page.waitForTimeout(5000);
+      const projTile = await page.$('button:has-text("New project"), div:has-text("+ New project"), div:has-text("New project"), a[href*="/project/"]');
+      if (projTile) {
+        await projTile.click({ force: true });
+        await page.waitForTimeout(6000);
       }
     } catch (e) {}
   }
 
   // Wait for Slate Editor
   console.log('⏳ Waiting for Slate.js prompt editor...');
-  await page.waitForSelector('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]', { timeout: 30000 });
-  console.log('✅ Slate Prompt Editor Ready!\n');
+  try {
+    await page.waitForSelector('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]', { timeout: 35000 });
+    console.log('✅ Slate Prompt Editor Ready! Starting Autonomous Generation Loop...\n');
+  } catch (e) {
+    console.log('⚠️ Editor not detected yet, trying direct canvas navigation...');
+    await page.goto('https://labs.google/fx/tools/flow/project/create', { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await page.waitForSelector('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]', { timeout: 25000 });
+    console.log('✅ Slate Prompt Editor Ready! Starting Autonomous Generation Loop...\n');
+  }
 
   // Loop through topics
   for (let idx = 0; idx < targetTopics.length; idx++) {
