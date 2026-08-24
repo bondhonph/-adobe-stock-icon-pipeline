@@ -5,10 +5,35 @@ export async function generateIconsWithAI(
   topicName: string,
   settings: AISettings
 ): Promise<string[]> {
-  if (settings.provider === 'smart_offline' || !settings.apiKey) {
+  // If user selected offline mode explicitly and has no key
+  if (settings.provider === 'smart_offline' && !settings.apiKey) {
     return generateSmartIcons(topicName);
   }
 
+  try {
+    // 1. First attempt to call the Next.js API Route (which has access to Vercel Environment Variables!)
+    const apiRes = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        topic: topicName,
+        provider: settings.provider || 'openrouter',
+        model: settings.model || 'openai/gpt-4o-mini',
+        apiKey: settings.apiKey || undefined
+      })
+    });
+
+    if (apiRes.ok) {
+      const data = await apiRes.json();
+      if (data.icons && data.icons.length > 0) {
+        return data.icons;
+      }
+    }
+  } catch (err) {
+    console.warn('API Route call failed, attempting client-side fallback:', err);
+  }
+
+  // 2. Direct client fallback if API route is unavailable
   const prompt = `You are an expert Adobe Stock contributor, commercial graphic designer, icon-set researcher, and AI prompt engineer.
 Theme: "${topicName}".
 Generate EXACTLY 32 commercially useful, visually distinct, highly recognizable, professional icon concepts directly related to "${topicName}" for Adobe Stock.
@@ -20,60 +45,30 @@ Rules:
 - Return ONLY the numbered list of 32 icons without intro or outro.`;
 
   try {
-    if (settings.provider === 'gemini') {
-      const model = settings.model || 'gemini-1.5-flash';
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${settings.apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: settings.temperature || 0.7 }
-          })
-        }
-      );
-
-      const data = await response.json();
-      const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      return parseIconList(rawText, topicName);
-    }
-
-    if (settings.provider === 'openai' || settings.provider === 'groq' || settings.provider === 'openrouter') {
+    if (settings.provider === 'openrouter' || settings.provider === 'openai') {
       const endpoint =
-        settings.provider === 'groq'
-          ? 'https://api.groq.com/openai/v1/chat/completions'
-          : settings.provider === 'openrouter'
+        settings.provider === 'openrouter'
           ? 'https://openrouter.ai/api/v1/chat/completions'
           : 'https://api.openai.com/v1/chat/completions';
 
       const defaultModel =
-        settings.provider === 'groq'
-          ? 'llama-3.3-70b-versatile'
-          : settings.provider === 'openrouter'
+        settings.provider === 'openrouter'
           ? 'openai/gpt-4o-mini'
           : 'gpt-4o-mini';
 
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${settings.apiKey}`
-      };
-
-      if (settings.provider === 'openrouter') {
-        headers['HTTP-Referer'] = 'https://adobe-stock-icon-pipeline.vercel.app';
-        headers['X-Title'] = 'Adobe Stock Icon Generator';
-      }
-
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${settings.apiKey}`
+        },
         body: JSON.stringify({
           model: settings.model || defaultModel,
           messages: [
             { role: 'system', content: 'You are an expert Adobe Stock icon researcher.' },
             { role: 'user', content: prompt }
           ],
-          temperature: settings.temperature || 0.7
+          temperature: 0.7
         })
       });
 
@@ -82,7 +77,7 @@ Rules:
       return parseIconList(rawText, topicName);
     }
   } catch (error) {
-    console.error('AI generation error, falling back to smart engine:', error);
+    console.error('Client AI generation error:', error);
   }
 
   return generateSmartIcons(topicName);
