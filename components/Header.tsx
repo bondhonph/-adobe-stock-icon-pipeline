@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sparkles, FileText, Sliders, Settings, Upload, ExternalLink, Download, Layers, Plus, Trash2 } from 'lucide-react';
+import { Sparkles, FileText, Sliders, Settings, Upload, ExternalLink, Download, Layers, Plus, Trash2, Bot } from 'lucide-react';
 import { ProjectData } from '@/lib/types';
 
 interface HeaderProps {
@@ -11,6 +11,7 @@ interface HeaderProps {
   onOpenUpload: () => void;
   onOpenTemplates: () => void;
   onOpenBatch: () => void;
+  onOpenAutoPilot: () => void;
   onOpenSettings: () => void;
 }
 
@@ -23,6 +24,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenUpload,
   onOpenTemplates,
   onOpenBatch,
+  onOpenAutoPilot,
   onOpenSettings,
 }) => {
   return (
@@ -105,11 +107,20 @@ export const Header: React.FC<HeaderProps> = ({
           <span>Batch Export</span>
         </button>
 
+        <button
+          onClick={onOpenAutoPilot}
+          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-extrabold bg-gradient-to-r from-purple-600 via-indigo-600 to-cyan-500 hover:from-purple-500 hover:to-cyan-400 text-white shadow-lg shadow-purple-500/30 transition animate-pulse"
+          title="Run 100% Full Auto-Pilot Bot"
+        >
+          <Bot className="h-4 w-4" />
+          <span>⚡ Full Auto-Pilot Bot</span>
+        </button>
+
         <a
           href="https://labs.google/fx/tools/flow"
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-md shadow-purple-500/25 transition"
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
         >
           <span>Open Google Flow</span>
           <ExternalLink className="h-3.5 w-3.5" />

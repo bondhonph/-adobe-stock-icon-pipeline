@@ -9,6 +9,7 @@ import { BatchModal } from '@/components/BatchModal';
 import { TemplateModal } from '@/components/TemplateModal';
 import { UploadModal } from '@/components/UploadModal';
 import { SettingsModal } from '@/components/SettingsModal';
+import { AutoPilotModal } from '@/components/AutoPilotModal';
 import { TopicItem, ProjectData, PromptTemplate, AISettings } from '@/lib/types';
 import { DEFAULT_PROMPT_TEMPLATES, buildPrompts } from '@/lib/promptTemplates';
 import { generateSmartIcons } from '@/lib/smartGenerator';
@@ -34,6 +35,7 @@ export default function DashboardPage() {
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isTemplatesOpen, setIsTemplatesOpen] = useState(false);
   const [isBatchOpen, setIsBatchOpen] = useState(false);
+  const [isAutoPilotOpen, setIsAutoPilotOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
 // Initialize from LocalStorage or empty default
@@ -284,6 +286,7 @@ export default function DashboardPage() {
         onOpenUpload={() => setIsUploadOpen(true)}
         onOpenTemplates={() => setIsTemplatesOpen(true)}
         onOpenBatch={() => setIsBatchOpen(true)}
+        onOpenAutoPilot={() => setIsAutoPilotOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
@@ -314,6 +317,12 @@ export default function DashboardPage() {
       </div>
 
       {/* Modals */}
+      <AutoPilotModal
+        isOpen={isAutoPilotOpen}
+        onClose={() => setIsAutoPilotOpen(false)}
+        topics={currentProject.topics}
+      />
+
       <BatchModal
         isOpen={isBatchOpen}
         onClose={() => setIsBatchOpen(false)}
