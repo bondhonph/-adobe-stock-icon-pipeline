@@ -6,8 +6,8 @@ const topics = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'public', '
 const code = `// ==UserScript==
 // @name         Google Flow - Adobe Stock 100% Autonomous Bot
 // @namespace    http://tampermonkey.net/
-// @version      1.0.2
-// @description  Fully autonomous bot for Google Flow AI: PDF -> ChatGPT Prompt -> Generate -> 2x Upscale -> Auto-Download
+// @version      1.0.3
+// @description  Fully autonomous bot for Google Flow AI (Slate.js native injection): PDF -> ChatGPT Prompt -> Generate -> 2x Upscale -> Auto-Download
 // @author       Adobe Stock Automation
 // @match        https://labs.google/fx/tools/flow*
 // @grant        none
@@ -22,7 +22,7 @@ const code = `// ==UserScript==
   }
   window.__FLOW_AUTOPILOT_INITIALIZED__ = true;
 
-  console.log('🚀 [Google Flow Auto-Pilot] Bot Initialized with 500 PDF Topics!');
+  console.log('🚀 [Google Flow Auto-Pilot] Initialized with Slate.js Native Engine & 500 PDF Topics!');
 
   const EMBEDDED_TOPICS = ${JSON.stringify(topics)};
 
@@ -44,7 +44,7 @@ const code = `// ==UserScript==
           <span style="font-size: 20px;">⚡</span>
           <div>
             <div style="font-weight: 800; font-size: 13px; color: #fff; letter-spacing: 0.5px;">FLOW AUTO-PILOT</div>
-            <div style="font-size: 10px; color: #a5b4fc;">\${topicsList.length} PDF Topics Loaded</div>
+            <div style="font-size: 10px; color: #a5b4fc;">Slate.js Engine • \${topicsList.length} Topics</div>
           </div>
         </div>
         <button id="flow-hud-toggle" style="background: rgba(255,255,255,0.1); border: none; color: #fff; width: 26px; height: 26px; border-radius: 8px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center;">−</button>
@@ -92,8 +92,8 @@ const code = `// ==UserScript==
 
         <!-- Live Log Console -->
         <div id="flow-hud-logs" style="background: #020617; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 8px 10px; height: 130px; overflow-y: auto; font-family: monospace; font-size: 10px; color: #94a3b8; line-height: 1.4;">
-          <div style="color: #38bdf8;">[Flow Auto-Pilot] Ready! \${topicsList.length} PDF topics loaded.</div>
-          <div style="color: #a5b4fc;">👉 Click START to begin unattended generation!</div>
+          <div style="color: #38bdf8;">[Flow Auto-Pilot] Slate.js Input Engine ready.</div>
+          <div style="color: #a5b4fc;">👉 Click START to generate 32-icon sets automatically!</div>
         </div>
       </div>
     \`;
@@ -180,7 +180,7 @@ const code = `// ==UserScript==
     const filtered = topicsList.filter(t => t.id >= startId && t.id <= endId);
     if (filtered.length === 0) {
       log('⚠️ No topics in range! Using topic #1', '#f59e0b');
-      filtered.push(topicsList[0] || { id: 1, topic: 'Real Estate' });
+      filtered.push(topicsList[0] || { id: 1, topic: 'Business Strategy & Management' });
     }
 
     botRunning = true;
@@ -200,13 +200,13 @@ const code = `// ==UserScript==
       const { lineArt, solid } = generatePrompts(item.topic);
 
       // 1. Line Art
-      log(\`🎨 [Line Art] Typing prompt & Submitting...\`, '#60a5fa');
+      log(\`🎨 [Line Art] Inserting into Slate editor...\`, '#60a5fa');
       await executeFlowStep(lineArt, 'Line Art');
 
       if (!botRunning) break;
 
       // 2. Solid Fill
-      log(\`🎨 [Solid] Typing prompt & Submitting...\`, '#c084fc');
+      log(\`🎨 [Solid] Inserting into Slate editor...\`, '#c084fc');
       await executeFlowStep(solid, 'Solid');
 
       log(\`✅ Topic #\${item.id} complete! Both 2x Line Art & Solid saved.\`, '#4ade80');
@@ -227,109 +227,132 @@ const code = `// ==UserScript==
   }
 
   async function executeFlowStep(promptText, styleType) {
-    let promptBox = findPromptInput();
-    if (!promptBox) {
-      log(\`⚠️ Searching for prompt box...\`, '#f59e0b');
+    let slateEditor = findSlateEditor();
+    if (!slateEditor) {
+      log(\`⚠️ Searching for Slate prompt box...\`, '#f59e0b');
       for (let a = 0; a < 8; a++) {
         await sleep(1000);
-        promptBox = findPromptInput();
-        if (promptBox) break;
+        slateEditor = findSlateEditor();
+        if (slateEditor) break;
       }
     }
 
-    if (!promptBox) {
-      log(\`❌ Prompt box not found! Please click inside the prompt bar.\`, '#ef4444');
+    if (!slateEditor) {
+      log(\`❌ Slate prompt box not found! Please click inside prompt bar.\`, '#ef4444');
       return;
     }
 
-    // 1. Focus, click and fill text with full React/Lexical compatibility
-    promptBox.focus();
-    promptBox.click();
+    // 1. Focus Slate Editor
+    slateEditor.focus();
+    slateEditor.click();
     await sleep(200);
 
-    // Try multiple insertion methods
+    // Clear existing text in Slate
     try {
-      // Clear contents
-      document.execCommand('selectAll', false, null);
-      document.execCommand('delete', false, null);
-      
-      // Method A: Clipboard Paste Event
-      const dt = new DataTransfer();
-      dt.setData('text/plain', promptText);
-      promptBox.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
-      
-      // Method B: execCommand insertText
-      document.execCommand('insertText', false, promptText);
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(slateEditor);
+      sel.removeAllRanges();
+      sel.addRange(range);
     } catch (e) {}
 
-    // Method C: Native value setter for textarea/input
-    if (promptBox.tagName === 'TEXTAREA' || promptBox.tagName === 'INPUT') {
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set ||
-                     Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-      if (setter) setter.call(promptBox, promptText);
-      else promptBox.value = promptText;
-    }
+    // 2. Insert text via Slate.js beforeinput & DataTransfer paste
+    try {
+      const dt = new DataTransfer();
+      dt.setData('text/plain', promptText);
+      slateEditor.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    } catch (e) {}
 
-    // Dispatch full input event chain
-    promptBox.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: promptText }));
-    promptBox.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: promptText }));
-    promptBox.dispatchEvent(new Event('input', { bubbles: true }));
-    promptBox.dispatchEvent(new Event('change', { bubbles: true }));
+    slateEditor.dispatchEvent(new InputEvent('beforeinput', {
+      bubbles: true,
+      cancelable: true,
+      inputType: 'insertText',
+      data: promptText
+    }));
+
+    document.execCommand('insertText', false, promptText);
+
+    slateEditor.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      inputType: 'insertText',
+      data: promptText
+    }));
+
     await sleep(500);
 
-    // 2. Locate and Click the Submit Arrow Button (->)
-    log('🚀 Triggering Submit Arrow (->)...', '#38bdf8');
-    const submitSuccess = clickSubmitButton(promptBox);
+    // 3. Trigger Enter key on Slate Editor
+    log('⌨️ Sending Enter key to Slate Editor...', '#38bdf8');
+    slateEditor.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Enter',
+      code: 'Enter',
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true
+    }));
+    slateEditor.dispatchEvent(new KeyboardEvent('keypress', {
+      key: 'Enter',
+      code: 'Enter',
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true
+    }));
+    slateEditor.dispatchEvent(new KeyboardEvent('keyup', {
+      key: 'Enter',
+      code: 'Enter',
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true
+    }));
 
-    if (!submitSuccess) {
-      log('⌨️ Triggering Enter key...', '#a855f7');
-      promptBox.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-      promptBox.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-      promptBox.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-    }
+    // 4. Also Click Submit Arrow Button (->)
+    log('🚀 Triggering Submit Arrow (->)...', '#a855f7');
+    clickSubmitArrow(slateEditor);
 
     log(\`⏳ Generating \${styleType} image (waiting ~24s)...\`, '#f59e0b');
     await sleep(24000);
 
-    // 3. Find and click 2x Upscale
+    // 5. Trigger 2x Upscale
     log(\`🔍 Triggering 2x Upscale...\`, '#38bdf8');
     triggerUpscale();
     await sleep(9000);
 
-    // 4. Find and click Download
+    // 6. Trigger Download
     log(\`💾 Triggering Download...\`, '#4ade80');
     triggerDownload();
     await sleep(3000);
   }
 
-  function clickSubmitButton(promptBox) {
-    const pRect = promptBox.getBoundingClientRect();
-    
-    // Find all clickable buttons and icons on page
-    const allButtons = Array.from(document.querySelectorAll('button, [role="button"], div[class*="button"], div[class*="submit"], svg'));
-    
-    // Priority 1: Button near bottom right of prompt box
-    const arrowBtn = allButtons.find(el => {
+  function findSlateEditor() {
+    return document.querySelector('div[data-slate-editor="true"]') ||
+      document.querySelector('div[role="textbox"]') ||
+      document.querySelector('[contenteditable="true"]') ||
+      document.querySelector('textarea:not([hidden])');
+  }
+
+  function clickSubmitArrow(slateEditor) {
+    const pRect = slateEditor.getBoundingClientRect();
+    const candidates = Array.from(document.querySelectorAll('button, [role="button"], div[class*="button"], svg'));
+
+    // Find the arrow button at bottom-right of prompt bar
+    const arrow = candidates.find(el => {
       const rect = el.getBoundingClientRect();
-      const isNearBottomRight = (rect.bottom >= pRect.bottom - 20) && (rect.bottom <= pRect.bottom + 80) && (rect.right >= pRect.right - 120);
+      const isNearBottomRight = (rect.bottom >= pRect.bottom - 15) && (rect.bottom <= pRect.bottom + 80) && (rect.right >= pRect.right - 100);
       const isNotAgent = !el.textContent?.toLowerCase().includes('agent') && !el.textContent?.toLowerCase().includes('banana');
       return isNearBottomRight && isNotAgent && rect.width > 0 && rect.height > 0;
     });
 
-    if (arrowBtn) {
-      arrowBtn.removeAttribute('disabled');
-      arrowBtn.removeAttribute('aria-disabled');
-      
-      // Dispatch full mouse & pointer interaction
-      arrowBtn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
-      arrowBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-      arrowBtn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
-      arrowBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-      arrowBtn.click();
-      return true;
+    if (arrow) {
+      arrow.removeAttribute('disabled');
+      arrow.removeAttribute('aria-disabled');
+      arrow.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+      arrow.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      arrow.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
+      arrow.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+      arrow.click();
     }
-
-    return false;
   }
 
   function triggerUpscale() {
@@ -339,7 +362,6 @@ const code = `// ==UserScript==
       return;
     }
 
-    // Hover & click newest card/node on canvas
     const cards = Array.from(document.querySelectorAll('div[class*="node"], div[class*="card"], div[class*="image"], img, canvas'));
     if (cards.length > 0) {
       const latest = cards[cards.length - 1];
@@ -362,14 +384,6 @@ const code = `// ==UserScript==
     const allButtons = Array.from(document.querySelectorAll('button, [role="button"]'));
     const dl = allButtons.find(b => b.getAttribute('aria-label')?.toLowerCase().includes('download') || b.querySelector('svg[data-icon="download"]'));
     if (dl) dl.click();
-  }
-
-  function findPromptInput() {
-    return document.querySelector('div[role="textbox"]') ||
-      document.querySelector('[contenteditable="true"]') ||
-      document.querySelector('textarea:not([hidden])') ||
-      document.querySelector('input[type="text"]:not([hidden])') ||
-      document.querySelector('.ProseMirror');
   }
 
   function findElementByText(matchTexts) {
@@ -426,4 +440,4 @@ const code = `// ==UserScript==
 const extDir = path.join(__dirname, '..', '..', 'flow-autopilot-extension');
 if (!fs.existsSync(extDir)) fs.mkdirSync(extDir, { recursive: true });
 fs.writeFileSync(path.join(extDir, 'content.js'), code);
-console.log('Successfully generated updated content.js with robust React paste events & submit button triggers!');
+console.log('Successfully generated Slate.js native content.js!');
