@@ -43,8 +43,8 @@ A clean, professional icon set featuring 32 bold outline icons based on the them
 A clean, professional icon set featuring 32 solid filled icons based on the theme of {{THEME}}. The icons are arranged in a perfectly aligned grid layout (8 columns × 4 rows), with equal spacing between each icon. Each icon is centered within its own identical square bounding box, maintaining consistent padding, proportions and visual balance. Style: solid fill, bold, minimal, modern, professional vector-style icons. No outlines or strokes, only filled shapes. Smooth edges, clean geometric construction, consistent visual weight and strong silhouettes. Composition: pixel-perfect 8 × 4 grid system, mathematically equal spacing, consistent margins on all sides. Design rules: fully filled shapes, no stroke, no outline, no gradients, no shadows, no 3D effects. Background: pure white background, clean and isolated. Rendering: flat vector-style appearance, clean geometric shapes, crisp edges. STRICT ICON CONTENT: [LIST 32 ICONS HERE]. All 32 icons must maintain the same visual family.`;
 
 const CONFIG = {
-  startTopicId: 1,
-  endTopicId: 50,
+  startTopicId: parseInt(process.env.START_TOPIC_ID || '1', 10),
+  endTopicId: parseInt(process.env.END_TOPIC_ID || '50', 10),
   lineArtDir: path.join(WORKSPACE_DIR, '1-50', 'Line Art'),
   solidDir: path.join(WORKSPACE_DIR, '1-50', 'Solid'),
   flowUrl: 'https://labs.google/fx/tools/flow',
