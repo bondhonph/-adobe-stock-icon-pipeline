@@ -36,7 +36,7 @@ export default function DashboardPage() {
   const [isBatchOpen, setIsBatchOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  // Initialize from LocalStorage or default
+  // Initialize from LocalStorage or empty default
   useEffect(() => {
     try {
       const savedProjects = localStorage.getItem('adobe_icon_projects');
@@ -54,17 +54,27 @@ export default function DashboardPage() {
       if (savedProjects) {
         const parsed = JSON.parse(savedProjects);
         setProjects(parsed);
+        if (parsed.length > 0) {
+          setCurrentProjectId(parsed[0].id);
+          if (parsed[0].topics.length > 0) {
+            setSelectedTopicId(parsed[0].topics[0].id);
+          } else {
+            setSelectedTopicId(null);
+          }
+        }
       } else {
-        // Initial setup with default 500 topics
+        // Start 100% blank - No built-in topics!
         const initialProject: ProjectData = {
-          id: DEFAULT_PROJECT_ID,
-          name: 'Icon (1).pdf (500 Topics)',
-          description: 'Official 500 topic dataset for Adobe Stock',
+          id: `project-${Date.now()}`,
+          name: 'My Project (Upload PDF)',
+          description: 'Upload your PDF or add topics',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-          topics: defaultTopicsData as TopicItem[],
+          topics: [],
         };
         setProjects([initialProject]);
+        setCurrentProjectId(initialProject.id);
+        setSelectedTopicId(null);
         localStorage.setItem('adobe_icon_projects', JSON.stringify([initialProject]));
       }
     } catch (e) {
@@ -299,6 +309,7 @@ export default function DashboardPage() {
           onToggleStatus={handleToggleStatus}
           onToggleStar={handleToggleStar}
           onNextTopic={handleNextTopic}
+          onOpenUpload={() => setIsUploadOpen(true)}
         />
       </div>
 

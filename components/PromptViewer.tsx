@@ -13,6 +13,7 @@ interface PromptViewerProps {
   onToggleStatus: (id: number) => void;
   onToggleStar: (id: number) => void;
   onNextTopic: () => void;
+  onOpenUpload?: () => void;
 }
 
 export const PromptViewer: React.FC<PromptViewerProps> = ({
@@ -24,6 +25,7 @@ export const PromptViewer: React.FC<PromptViewerProps> = ({
   onToggleStatus,
   onToggleStar,
   onNextTopic,
+  onOpenUpload,
 }) => {
   const [copiedType, setCopiedType] = useState<'line' | 'solid' | 'icons' | null>(null);
   const [isEditingIcons, setIsEditingIcons] = useState(false);
@@ -49,10 +51,18 @@ export const PromptViewer: React.FC<PromptViewerProps> = ({
         <div className="h-16 w-16 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center mb-4 text-purple-400">
           <Sparkles className="h-8 w-8 animate-pulse" />
         </div>
-        <h3 className="text-lg font-semibold text-white">Select a Topic</h3>
-        <p className="text-sm text-slate-400 max-w-sm mt-1">
-          Pick any topic from the left sidebar to automatically generate 32 icons and Flow AI prompts.
+        <h3 className="text-xl font-bold text-white">No Topics Added Yet</h3>
+        <p className="text-sm text-slate-400 max-w-sm mt-2 mb-6">
+          Upload any PDF or paste a list of topics to automatically start generating 32-icon sets & Flow AI prompts.
         </p>
+        {onOpenUpload && (
+          <button
+            onClick={onOpenUpload}
+            className="flex items-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-sm shadow-xl shadow-purple-600/25 transition"
+          >
+            <span>Upload Your PDF / Topics</span>
+          </button>
+        )}
       </div>
     );
   }
