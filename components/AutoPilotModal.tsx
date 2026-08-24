@@ -70,9 +70,21 @@ export const AutoPilotModal: React.FC<AutoPilotModalProps> = ({
   const progressPercent = Math.min(100, Math.round((completedCount / totalToProcess) * 100));
 
   const handleStart = async () => {
+    // If running on Vercel Cloud, provide clear instructions since Chrome is on user's PC
+    if (typeof window !== 'undefined' && window.location.hostname.includes('vercel.app')) {
+      setBotStatus('idle');
+      setLogs([
+        `[${new Date().toLocaleTimeString()}] ℹ️ Google Flow Bot runs on your Local PC (where your Google Chrome & account are logged in).`,
+        `[${new Date().toLocaleTimeString()}] 📂 Open your workspace folder: G:\\Work Space\\Adobe Contribution\\Icon 2026`,
+        `[${new Date().toLocaleTimeString()}] ▶️ Double-click "START_AUTO_PIPELINE.bat" to start full automation with your Google Chrome!`,
+        `[${new Date().toLocaleTimeString()}] 💡 Or run "npm run dev" locally to control the bot directly from http://localhost:3000.`
+      ]);
+      return;
+    }
+
     setBotStatus('running');
     setLogs([
-      `[${new Date().toLocaleTimeString()}] 🚀 Launching Autonomous Google Flow Bot...`,
+      `[${new Date().toLocaleTimeString()}] 🚀 Launching Autonomous Google Flow Bot on your PC...`,
       `[${new Date().toLocaleTimeString()}] 📋 Target Range: Topics #${startId} to #${endId}`,
       `[${new Date().toLocaleTimeString()}] 🤖 Connecting OpenRouter (ChatGPT) -> Google Flow...`
     ]);
