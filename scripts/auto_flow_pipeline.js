@@ -5,11 +5,12 @@
  * 1. PDF File -> Extracts all topics
  * 2. Master Prompt + Topic -> Sent to OpenRouter (ChatGPT)
  * 3. ChatGPT generates the exact 32-icon set, Line Art Prompt & Solid Prompt
- * 4. Bot sends prompt to Google Flow (https://labs.google/fx/tools/flow)
- * 5. Google Flow generates image
- * 6. Bot triggers 2x Upscale
- * 7. Bot downloads 2x high-res image directly into organized folders (Line Art / Solid)
- * 8. Repeats for all topics in the PDF automatically!
+ * 4. Bot connects to Google Flow (https://labs.google/fx/tools/flow)
+ * 5. Handles Google Flow project opening & prompt input
+ * 6. Google Flow generates image
+ * 7. Bot triggers 2x Upscale
+ * 8. Bot downloads 2x high-res image directly into organized folders (Line Art / Solid)
+ * 9. Repeats for all topics in the PDF automatically!
  */
 
 const { chromium } = require('playwright');
@@ -105,7 +106,7 @@ async function generatePromptsWithChatGPT(topicName, apiKey) {
   const prompt = MASTER_PROMPT_TEMPLATE.replace(/\{\{THEME\}\}/g, topicName);
 
   if (!apiKey) {
-    console.log('   ⚠️ No OpenRouter API Key in .env. Using smart template fallback...');
+    console.log('   ℹ️ Using smart template generator...');
     return buildFallbackPrompts(topicName);
   }
 
@@ -131,7 +132,6 @@ async function generatePromptsWithChatGPT(topicName, apiKey) {
     const data = await res.json();
     const rawText = data?.choices?.[0]?.message?.content || '';
 
-    // Parse Outline & Solid prompts
     const outlineMatch = rawText.match(/===OUTLINE_PROMPT===\s*([\s\S]+?)(?====SOLID_PROMPT===|$)/);
     const solidMatch = rawText.match(/===SOLID_PROMPT===\s*([\s\S]+?)$/);
 
@@ -140,7 +140,7 @@ async function generatePromptsWithChatGPT(topicName, apiKey) {
 
     return { lineArt, solid };
   } catch (err) {
-    console.warn('   ⚠️ OpenRouter call error, using fallback:', err.message);
+    console.warn('   ⚠️ OpenRouter call notice, using fallback:', err.message);
     return buildFallbackPrompts(topicName);
   }
 }
@@ -162,8 +162,6 @@ async function runAutoPipeline() {
   const apiKey = getApiKey();
   if (apiKey) {
     console.log('🔑 OpenRouter API Key detected: ACTIVE');
-  } else {
-    console.log('ℹ️ Tip: Create a .env file with OPENROUTER_API_KEY=sk-or-v1-... to use ChatGPT.');
   }
 
   console.log('📄 Extracting topics from PDF...');
@@ -175,6 +173,9 @@ async function runAutoPipeline() {
   let context;
   let page;
 
+  const botProfileDir = path.join(WORKSPACE_DIR, '.chrome-flow-bot-profile');
+  if (!fs.existsSync(botProfileDir)) fs.mkdirSync(botProfileDir, { recursive: true });
+
   try {
     console.log('🔌 Connecting to existing Google Chrome session...');
     const browser = await chromium.connectOverCDP(CONFIG.cdpUrl);
@@ -183,24 +184,31 @@ async function runAutoPipeline() {
     const pages = context.pages();
     page = pages.find(p => p.url().includes('labs.google/fx/tools/flow')) || pages[0] || (await context.newPage());
   } catch (e) {
-    console.log('🌐 Launching Chrome with your Google profile...');
-    const userDataDir = path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'User Data');
-    context = await chromium.launchPersistentContext(userDataDir, {
+    console.log('🌐 Launching dedicated Google Chrome Automation window...');
+    context = await chromium.launchPersistentContext(botProfileDir, {
       headless: false,
       channel: 'chrome',
-      args: ['--start-maximized', '--disable-blink-features=AutomationControlled'],
+      args: [
+        '--start-maximized',
+        '--disable-blink-features=AutomationControlled',
+        '--no-sandbox'
+      ],
       viewport: null
     });
-    page = context.pages()[0] || (await context.newPage());
+    const pages = context.pages();
+    page = pages[0] || (await context.newPage());
   }
 
   if (!page.url().includes('labs.google/fx/tools/flow')) {
     console.log(`🔗 Navigating to ${CONFIG.flowUrl}...`);
-    await page.goto(CONFIG.flowUrl, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(5000);
+    await page.goto(CONFIG.flowUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(4000);
   }
 
-  console.log('\n✅ Connected to Google Flow! Starting Autonomous Generation Loop...\n');
+  // Handle Google Sign-in or Project Selection in Google Flow
+  await prepareGoogleFlowWorkspace(page);
+
+  console.log('\n✅ Google Flow Workspace Ready! Starting Autonomous Generation Loop...\n');
 
   for (const topicItem of targetTopics) {
     const topicId = topicItem.id;
@@ -211,14 +219,13 @@ async function runAutoPipeline() {
     console.log(`▶️ TOPIC #${topicId}: ${topicName}`);
     console.log(`================================================================`);
 
-    // 1. Ask OpenRouter ChatGPT to generate the 32 icons and prompts based on Master Prompt
     console.log(`🤖 Generating 32 icons & prompts via OpenRouter (ChatGPT)...`);
     const { lineArt, solid } = await generatePromptsWithChatGPT(topicName, apiKey);
 
-    // 2. Line Art in Google Flow -> Generate -> 2x Upscale -> Download
+    // 1. Line Art in Google Flow -> Generate -> 2x Upscale -> Download
     await executeFlowStep(page, lineArt, topicId, topicName, 'Line Art', CONFIG.lineArtDir, fileBase);
 
-    // 3. Solid Fill in Google Flow -> Generate -> 2x Upscale -> Download
+    // 2. Solid Fill in Google Flow -> Generate -> 2x Upscale -> Download
     await executeFlowStep(page, solid, topicId, topicName, 'Solid', CONFIG.solidDir, fileBase);
 
     console.log(`✅ Finished Topic #${topicId}: Both Line Art & Solid 2x Upscaled and Saved!\n`);
@@ -227,50 +234,137 @@ async function runAutoPipeline() {
   console.log('🎉🎉🎉 100% COMPLETE! All PDF topics processed, generated, 2x upscaled & downloaded! 🎉🎉🎉');
 }
 
+async function prepareGoogleFlowWorkspace(page) {
+  console.log('🔍 Checking Google Flow state...');
+
+  // If already inside a project workspace canvas
+  if (page.url().includes('/project') || page.url().includes('/flow/')) {
+    const input = await page.$('div[role="textbox"], div[contenteditable="true"], textarea:not([name="g-recaptcha-response"])');
+    if (input) {
+      console.log('✅ Directly in Flow AI canvas!');
+      return;
+    }
+  }
+
+  // Check if sign-in is needed
+  const isSignInVisible = await page.$('a[href*="accounts.google.com"], button:has-text("Sign in")');
+  if (isSignInVisible) {
+    console.log('⚠️ Please SIGN IN to your Google Account in the opened Chrome window.');
+    console.log('⏳ Waiting up to 60 seconds for sign-in...');
+    try {
+      await page.waitForSelector('button:has-text("New project"), a[href*="/project"], div[role="textbox"], [contenteditable="true"]', { timeout: 60000 });
+      console.log('✅ Sign-in detected!');
+    } catch (err) {
+      console.log('Proceeding to check workspace...');
+    }
+  }
+
+  // Click "+ New Project" or enter first project using evaluate / force click
+  try {
+    const clicked = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button, a'));
+      const newProjBtn = btns.find(b => 
+        b.textContent?.trim().toLowerCase().includes('new project') ||
+        b.getAttribute('aria-label')?.toLowerCase().includes('new project')
+      );
+      if (newProjBtn) {
+        newProjBtn.click();
+        return true;
+      }
+      return false;
+    });
+
+    if (clicked) {
+      console.log('📁 Clicked "New project" button!');
+      await page.waitForTimeout(4000);
+    } else {
+      // Direct click attempt
+      const newProjectBtn = await page.$('button:has-text("New project"), a:has-text("New project")');
+      if (newProjectBtn) {
+        await newProjectBtn.click({ force: true }).catch(() => {});
+        await page.waitForTimeout(3000);
+      }
+    }
+  } catch (e) {
+    console.log('Workspace check completed.');
+  }
+}
+
 async function executeFlowStep(page, promptText, topicId, topicName, styleType, destDir, fileBase) {
   console.log(`  🎨 [${styleType}] -> Inputting prompt into Google Flow...`);
 
   try {
-    const promptInput = await page.waitForSelector('textarea, [contenteditable="true"], input[type="text"]', { timeout: 10000 });
-    await promptInput.click();
-    await page.keyboard.press('Control+A');
-    await page.keyboard.press('Backspace');
-    await page.waitForTimeout(300);
+    const inputSelectors = [
+      'div[role="textbox"]',
+      'div[contenteditable="true"]',
+      'textarea:not([name="g-recaptcha-response"])',
+      'div.ProseMirror',
+      '[aria-label*="prompt" i]',
+      '[aria-label*="Describe" i]',
+      '[placeholder*="Describe" i]',
+      '[placeholder*="prompt" i]',
+      'input[type="text"]:not([hidden])'
+    ];
 
-    await promptInput.fill(promptText);
-    await page.waitForTimeout(500);
-
-    const generateBtn = await page.$('button:has-text("Generate"), button:has-text("Create"), button[aria-label*="Generate"]');
-    if (generateBtn) {
-      await generateBtn.click();
-    } else {
-      await page.keyboard.press('Enter');
-    }
-    console.log(`     ⏳ Generating image in Flow AI...`);
-
-    // Wait for image generation
-    await page.waitForTimeout(18000);
-
-    // Trigger 2x Upscale
-    const upscaleBtn = await page.$('button:has-text("2x"), button:has-text("Upscale"), button[aria-label*="Upscale"]');
-    if (upscaleBtn) {
-      console.log(`     🔍 Triggering 2x Upscale...`);
-      await upscaleBtn.click();
-      await page.waitForTimeout(7000);
+    let promptInput = null;
+    for (const sel of inputSelectors) {
+      try {
+        const el = await page.$(sel);
+        if (el && await el.isVisible()) {
+          promptInput = el;
+          break;
+        }
+      } catch (e) {}
     }
 
-    // Trigger Download
-    const downloadPromise = page.waitForEvent('download', { timeout: 15000 }).catch(() => null);
-    const downloadBtn = await page.$('button:has-text("Download"), button[aria-label*="Download"], svg[data-icon="download"]');
-    
-    if (downloadBtn) {
-      console.log(`     💾 Downloading 2x image to ${styleType} folder...`);
-      await downloadBtn.click();
-      const download = await downloadPromise;
-      if (download) {
-        const targetPath = path.join(destDir, `${fileBase}.jpeg`);
-        await download.saveAs(targetPath);
-        console.log(`     ✅ Saved: ${targetPath}`);
+    if (!promptInput) {
+      promptInput = await page.waitForSelector(inputSelectors.join(','), { timeout: 10000 });
+    }
+
+    if (promptInput) {
+      await promptInput.click();
+      await page.keyboard.press('Control+A');
+      await page.keyboard.press('Backspace');
+      await page.waitForTimeout(200);
+
+      // Use evaluate or type
+      await promptInput.fill(promptText).catch(async () => {
+        await page.keyboard.insertText(promptText);
+      });
+      await page.waitForTimeout(400);
+
+      const generateBtn = await page.$('button:has-text("Generate"), button:has-text("Create"), button[aria-label*="Generate"]');
+      if (generateBtn && await generateBtn.isVisible()) {
+        await generateBtn.click();
+      } else {
+        await page.keyboard.press('Enter');
+      }
+      console.log(`     ⏳ Generating image in Flow AI...`);
+
+      // Wait for image generation
+      await page.waitForTimeout(18000);
+
+      // Trigger 2x Upscale
+      const upscaleBtn = await page.$('button:has-text("2x"), button:has-text("Upscale"), button[aria-label*="Upscale"]');
+      if (upscaleBtn && await upscaleBtn.isVisible()) {
+        console.log(`     🔍 Triggering 2x Upscale...`);
+        await upscaleBtn.click();
+        await page.waitForTimeout(7000);
+      }
+
+      // Trigger Download
+      const downloadPromise = page.waitForEvent('download', { timeout: 15000 }).catch(() => null);
+      const downloadBtn = await page.$('button:has-text("Download"), button[aria-label*="Download"], svg[data-icon="download"]');
+      
+      if (downloadBtn && await downloadBtn.isVisible()) {
+        console.log(`     💾 Downloading 2x image to ${styleType} folder...`);
+        await downloadBtn.click();
+        const download = await downloadPromise;
+        if (download) {
+          const targetPath = path.join(destDir, `${fileBase}.jpeg`);
+          await download.saveAs(targetPath);
+          console.log(`     ✅ Saved: ${targetPath}`);
+        }
       }
     }
 
