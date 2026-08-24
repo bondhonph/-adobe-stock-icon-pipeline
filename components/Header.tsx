@@ -1,11 +1,13 @@
 import React from 'react';
-import { Sparkles, FileText, Sliders, Settings, Upload, ExternalLink, Download, Layers } from 'lucide-react';
+import { Sparkles, FileText, Sliders, Settings, Upload, ExternalLink, Download, Layers, Plus, Trash2 } from 'lucide-react';
 import { ProjectData } from '@/lib/types';
 
 interface HeaderProps {
   currentProject: ProjectData;
   projects: ProjectData[];
   onSelectProject: (id: string) => void;
+  onNewBlankProject: () => void;
+  onDeleteProject: (id: string) => void;
   onOpenUpload: () => void;
   onOpenTemplates: () => void;
   onOpenBatch: () => void;
@@ -16,6 +18,8 @@ export const Header: React.FC<HeaderProps> = ({
   currentProject,
   projects,
   onSelectProject,
+  onNewBlankProject,
+  onDeleteProject,
   onOpenUpload,
   onOpenTemplates,
   onOpenBatch,
@@ -30,13 +34,13 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="font-bold text-lg text-white tracking-tight">Adobe Stock Icon AI Pipeline</h1>
+            <h1 className="font-bold text-lg text-white tracking-tight">Adobe Stock AI Auto Pipeline</h1>
             <span className="text-xs px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20 font-medium">
               Vercel + Google Flow
             </span>
           </div>
           
-          {/* Project Switcher */}
+          {/* Project Switcher & Actions */}
           <div className="flex items-center gap-2 mt-0.5">
             <Layers className="h-3.5 w-3.5 text-slate-400" />
             <select
@@ -50,6 +54,24 @@ export const Header: React.FC<HeaderProps> = ({
                 </option>
               ))}
             </select>
+
+            <button
+              onClick={onNewBlankProject}
+              className="text-[11px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 flex items-center gap-0.5 font-medium transition"
+              title="Create New Blank Project"
+            >
+              <Plus className="h-3 w-3" /> New
+            </button>
+
+            {projects.length > 1 && (
+              <button
+                onClick={() => onDeleteProject(currentProject.id)}
+                className="text-[11px] p-0.5 rounded text-slate-500 hover:text-red-400 transition"
+                title="Delete Current Project"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            )}
           </div>
         </div>
       </div>

@@ -223,6 +223,35 @@ export default function DashboardPage() {
     }
   };
 
+  const handleNewBlankProject = () => {
+    const newProject: ProjectData = {
+      id: `blank-project-${Date.now()}`,
+      name: `New Custom Batch (${projects.length + 1})`,
+      description: 'Upload your PDF or add custom topics',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      topics: [],
+    };
+    const updatedProjects = [...projects, newProject];
+    saveProjects(updatedProjects);
+    setCurrentProjectId(newProject.id);
+    setSelectedTopicId(null);
+  };
+
+  const handleDeleteProject = (idToDelete: string) => {
+    if (projects.length <= 1) return;
+    const filtered = projects.filter((p) => p.id !== idToDelete);
+    saveProjects(filtered);
+    if (currentProjectId === idToDelete) {
+      setCurrentProjectId(filtered[0].id);
+      if (filtered[0].topics.length > 0) {
+        setSelectedTopicId(filtered[0].topics[0].id);
+      } else {
+        setSelectedTopicId(null);
+      }
+    }
+  };
+
   const handleSaveTemplates = (newTemplates: PromptTemplate[]) => {
     setTemplates(newTemplates);
     localStorage.setItem('adobe_icon_templates', JSON.stringify(newTemplates));
@@ -240,6 +269,8 @@ export default function DashboardPage() {
         currentProject={currentProject}
         projects={projects}
         onSelectProject={setCurrentProjectId}
+        onNewBlankProject={handleNewBlankProject}
+        onDeleteProject={handleDeleteProject}
         onOpenUpload={() => setIsUploadOpen(true)}
         onOpenTemplates={() => setIsTemplatesOpen(true)}
         onOpenBatch={() => setIsBatchOpen(true)}
