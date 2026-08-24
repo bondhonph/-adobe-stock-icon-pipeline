@@ -6,7 +6,7 @@ const topics = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'public', '
 const code = `// ==UserScript==
 // @name         Google Flow - Adobe Stock 100% Autonomous Bot
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
+// @version      1.0.1
 // @description  Fully autonomous bot for Google Flow AI: PDF -> ChatGPT Prompt -> Generate -> 2x Upscale -> Auto-Download
 // @author       Adobe Stock Automation
 // @match        https://labs.google/fx/tools/flow*
@@ -189,9 +189,6 @@ const code = `// ==UserScript==
 
     log(\`🚀 Starting Auto-Pilot for \${filtered.length} topics (#\${startId} to #\${endId})...\`, '#38bdf8');
 
-    // Ensure we are inside a project canvas
-    await ensureInsideCanvas();
-
     for (let i = 0; i < filtered.length; i++) {
       if (!botRunning) break;
 
@@ -203,13 +200,13 @@ const code = `// ==UserScript==
       const { lineArt, solid } = generatePrompts(item.topic);
 
       // 1. Line Art
-      log(\`🎨 [Line Art] Submitting prompt...\`, '#60a5fa');
+      log(\`🎨 [Line Art] Submitting prompt & generating...\`, '#60a5fa');
       await executeFlowStep(lineArt, 'Line Art');
 
       if (!botRunning) break;
 
       // 2. Solid Fill
-      log(\`🎨 [Solid] Submitting prompt...\`, '#c084fc');
+      log(\`🎨 [Solid] Submitting prompt & generating...\`, '#c084fc');
       await executeFlowStep(solid, 'Solid');
 
       log(\`✅ Topic #\${item.id} complete! Both 2x Line Art & Solid saved.\`, '#4ade80');
@@ -229,88 +226,117 @@ const code = `// ==UserScript==
     log('⏹️ Auto-Pilot stopped.', '#ef4444');
   }
 
-  async function ensureInsideCanvas() {
-    let promptBox = findPromptInput();
-    if (promptBox) {
-      log('✅ Already in project canvas!', '#4ade80');
-      return;
-    }
-
-    log('📁 Opening project canvas...', '#38bdf8');
-    // Try clicking "+ New project" or first existing project tile
-    const projTile = findElementByText(['+ new project', 'new project', 'icon', 'aug', 'create']);
-    if (projTile) {
-      projTile.click();
-      await sleep(4000);
-    }
-
-    // Wait for prompt box
-    for (let a = 0; a < 8; a++) {
-      promptBox = findPromptInput();
-      if (promptBox) break;
-      await sleep(1500);
-    }
-  }
-
   async function executeFlowStep(promptText, styleType) {
     let promptBox = findPromptInput();
     if (!promptBox) {
       log(\`⚠️ Searching for prompt box...\`, '#f59e0b');
       for (let a = 0; a < 8; a++) {
-        await sleep(1500);
+        await sleep(1000);
         promptBox = findPromptInput();
         if (promptBox) break;
       }
     }
 
     if (!promptBox) {
-      log(\`❌ Prompt box not found. Please click inside the prompt box.\`, '#ef4444');
+      log(\`❌ Prompt box not found! Please click on the canvas prompt bar.\`, '#ef4444');
       return;
     }
 
-    // Focus & Type Prompt
+    // 1. Focus and insert prompt text
     promptBox.focus();
     promptBox.click();
     await sleep(200);
 
+    // Native insertText ensures React & ProseMirror detect changes
+    document.execCommand('selectAll', false, null);
+    document.execCommand('delete', false, null);
+    document.execCommand('insertText', false, promptText);
+
+    // Also update value if textarea
     if (promptBox.tagName === 'TEXTAREA' || promptBox.tagName === 'INPUT') {
       promptBox.value = promptText;
       promptBox.dispatchEvent(new Event('input', { bubbles: true }));
       promptBox.dispatchEvent(new Event('change', { bubbles: true }));
     } else {
-      promptBox.textContent = promptText;
-      promptBox.innerText = promptText;
       promptBox.dispatchEvent(new Event('input', { bubbles: true }));
       promptBox.dispatchEvent(new Event('change', { bubbles: true }));
     }
     await sleep(400);
 
-    // Click Generate Button or Enter
-    const genBtn = findElementByText(['generate', 'create']) || document.querySelector('button[aria-label*="Generate" i]');
-    if (genBtn) {
-      genBtn.click();
+    // 2. Find and click the Submit Arrow button (->)
+    let submitBtn = findSubmitButton(promptBox);
+    if (submitBtn) {
+      log('🚀 Clicking Submit Arrow (->)...', '#38bdf8');
+      submitBtn.click();
     } else {
+      log('⌨️ Pressing Enter to generate...', '#38bdf8');
       promptBox.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
     }
 
-    log(\`⏳ Generating \${styleType} image (waiting ~20s)...\`, '#f59e0b');
-    await sleep(20000);
+    log(\`⏳ Generating \${styleType} image (waiting ~22s)......\`, '#f59e0b');
+    await sleep(22000);
 
-    // Click 2x Upscale
+    // 3. Find and click 2x Upscale
+    log(\`🔍 Looking for 2x Upscale button...\`, '#38bdf8');
     const upscaleBtn = findElementByText(['2x', 'upscale', 'enhance']) || document.querySelector('button[aria-label*="Upscale" i]');
     if (upscaleBtn) {
-      log(\`🔍 Triggering 2x Upscale...\`, '#38bdf8');
+      log(\`🔍 Triggering 2x Upscale...\`, '#a855f7');
       upscaleBtn.click();
       await sleep(8000);
+    } else {
+      // Hover over the newest image/node on canvas to reveal action buttons
+      const images = Array.from(document.querySelectorAll('img, canvas, div[class*="node"], div[class*="card"]'));
+      if (images.length > 0) {
+        const lastImg = images[images.length - 1];
+        lastImg.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        lastImg.click();
+        await sleep(1000);
+        const up2 = findElementByText(['2x', 'upscale', 'enhance']) || document.querySelector('button[aria-label*="Upscale" i]');
+        if (up2) {
+          up2.click();
+          await sleep(8000);
+        }
+      }
     }
 
-    // Click Download
+    // 4. Find and click Download
+    log(\`💾 Looking for Download button...\`, '#38bdf8');
     const downloadBtn = findElementByText(['download', 'save']) || document.querySelector('button[aria-label*="Download" i], svg[data-icon="download"]');
     if (downloadBtn) {
-      log(\`💾 Downloading high-res 2x image...\`, '#4ade80');
+      log(\`💾 Downloading high-res image... ✅\`, '#4ade80');
       downloadBtn.click();
       await sleep(3000);
+    } else {
+      const allButtons = Array.from(document.querySelectorAll('button'));
+      const dl = allButtons.find(b => b.getAttribute('aria-label')?.toLowerCase().includes('download') || b.querySelector('svg'));
+      if (dl) {
+        dl.click();
+        await sleep(3000);
+      }
     }
+  }
+
+  function findSubmitButton(promptBox) {
+    // Look inside prompt bar container
+    const container = promptBox.closest('div[class*="container"]') || promptBox.parentElement?.parentElement || promptBox.parentElement;
+    if (container) {
+      const btns = Array.from(container.querySelectorAll('button'));
+      // Find the circular button with arrow or the last button that is not 'Agent' or 'Banana'
+      const arrowBtn = btns.find(b => {
+        const txt = b.textContent?.trim().toLowerCase();
+        return !txt.includes('agent') && !txt.includes('banana') && (b.querySelector('svg') || b.querySelector('path') || b.classList.toString().includes('submit') || b.getAttribute('aria-label')?.includes('Send'));
+      });
+      if (arrowBtn) return arrowBtn;
+      if (btns.length > 0) return btns[btns.length - 1];
+    }
+
+    // Fallback: search nearby buttons
+    const allBtns = Array.from(document.querySelectorAll('button'));
+    const pRect = promptBox.getBoundingClientRect();
+    return allBtns.find(b => {
+      const rect = b.getBoundingClientRect();
+      return rect.top >= pRect.top - 20 && rect.bottom <= pRect.bottom + 60 && rect.right >= pRect.right - 100;
+    });
   }
 
   function findPromptInput() {
@@ -375,4 +401,4 @@ const code = `// ==UserScript==
 const extDir = path.join(__dirname, '..', '..', 'flow-autopilot-extension');
 if (!fs.existsSync(extDir)) fs.mkdirSync(extDir, { recursive: true });
 fs.writeFileSync(path.join(extDir, 'content.js'), code);
-console.log('Successfully generated flow-autopilot-extension/content.js with 500 embedded topics!');
+console.log('Successfully updated content.js with submit button click handler!');
