@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Copy, Check, Sparkles, ExternalLink, RefreshCw, CheckCircle2, Star, ArrowRight, Grid, Edit3 } from 'lucide-react';
 import { TopicItem, PromptTemplate } from '@/lib/types';
+import { generateSmartIcons } from '@/lib/smartGenerator';
+import { buildPrompts } from '@/lib/promptTemplates';
 
 interface PromptViewerProps {
   topic: TopicItem | null;
@@ -27,6 +29,20 @@ export const PromptViewer: React.FC<PromptViewerProps> = ({
   const [isEditingIcons, setIsEditingIcons] = useState(false);
   const [editableIconsText, setEditableIconsText] = useState('');
 
+  const icons = useMemo(() => {
+    if (!topic) return [];
+    if (topic.iconList && topic.iconList.length >= 32) return topic.iconList;
+    return generateSmartIcons(topic.topic);
+  }, [topic]);
+
+  const { outlinePrompt, solidPrompt } = useMemo(() => {
+    if (!topic) return { outlinePrompt: '', solidPrompt: '' };
+    if (topic.outlinePrompt && topic.solidPrompt) {
+      return { outlinePrompt: topic.outlinePrompt, solidPrompt: topic.solidPrompt };
+    }
+    return buildPrompts(topic.topic, icons, template);
+  }, [topic, icons, template]);
+
   if (!topic) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[#090d16]">
@@ -40,10 +56,6 @@ export const PromptViewer: React.FC<PromptViewerProps> = ({
       </div>
     );
   }
-
-  const icons = topic.iconList || [];
-  const outlinePrompt = topic.outlinePrompt || '';
-  const solidPrompt = topic.solidPrompt || '';
 
   const handleCopy = (text: string, type: 'line' | 'solid' | 'icons') => {
     navigator.clipboard.writeText(text);
