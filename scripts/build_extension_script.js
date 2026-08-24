@@ -6,8 +6,8 @@ const topics = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'public', '
 const code = `// ==UserScript==
 // @name         Google Flow - Adobe Stock 100% Autonomous Bot
 // @namespace    http://tampermonkey.net/
-// @version      1.0.3
-// @description  Fully autonomous bot for Google Flow AI (Slate.js native injection): PDF -> ChatGPT Prompt -> Generate -> 2x Upscale -> Auto-Download
+// @version      1.0.4
+// @description  Autonomous Flow Bot with Real Image Generation Detection & Auto-Upscale/Download
 // @author       Adobe Stock Automation
 // @match        https://labs.google/fx/tools/flow*
 // @grant        none
@@ -22,7 +22,7 @@ const code = `// ==UserScript==
   }
   window.__FLOW_AUTOPILOT_INITIALIZED__ = true;
 
-  console.log('🚀 [Google Flow Auto-Pilot] Initialized with Slate.js Native Engine & 500 PDF Topics!');
+  console.log('🚀 [Google Flow Auto-Pilot] Initialized with Real Canvas Detection & 500 PDF Topics!');
 
   const EMBEDDED_TOPICS = ${JSON.stringify(topics)};
 
@@ -44,7 +44,7 @@ const code = `// ==UserScript==
           <span style="font-size: 20px;">⚡</span>
           <div>
             <div style="font-weight: 800; font-size: 13px; color: #fff; letter-spacing: 0.5px;">FLOW AUTO-PILOT</div>
-            <div style="font-size: 10px; color: #a5b4fc;">Slate.js Engine • \${topicsList.length} Topics</div>
+            <div style="font-size: 10px; color: #a5b4fc;">Live Canvas Detection • \${topicsList.length} Topics</div>
           </div>
         </div>
         <button id="flow-hud-toggle" style="background: rgba(255,255,255,0.1); border: none; color: #fff; width: 26px; height: 26px; border-radius: 8px; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center;">−</button>
@@ -91,9 +91,9 @@ const code = `// ==UserScript==
         </div>
 
         <!-- Live Log Console -->
-        <div id="flow-hud-logs" style="background: #020617; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 8px 10px; height: 130px; overflow-y: auto; font-family: monospace; font-size: 10px; color: #94a3b8; line-height: 1.4;">
-          <div style="color: #38bdf8;">[Flow Auto-Pilot] Slate.js Input Engine ready.</div>
-          <div style="color: #a5b4fc;">👉 Click START to generate 32-icon sets automatically!</div>
+        <div id="flow-hud-logs" style="background: #020617; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 8px 10px; height: 135px; overflow-y: auto; font-family: monospace; font-size: 10px; color: #94a3b8; line-height: 1.4;">
+          <div style="color: #38bdf8;">[Flow Auto-Pilot] Ready! \${topicsList.length} PDF topics loaded.</div>
+          <div style="color: #a5b4fc;">👉 Click START to begin autonomous generation!</div>
         </div>
       </div>
     \`;
@@ -200,14 +200,16 @@ const code = `// ==UserScript==
       const { lineArt, solid } = generatePrompts(item.topic);
 
       // 1. Line Art
-      log(\`🎨 [Line Art] Inserting into Slate editor...\`, '#60a5fa');
-      await executeFlowStep(lineArt, 'Line Art');
+      log(\`🎨 [Line Art] Typing prompt into box...\`, '#60a5fa');
+      const ok1 = await executeFlowStep(lineArt, 'Line Art');
+      if (!ok1 && !botRunning) break;
 
       if (!botRunning) break;
 
       // 2. Solid Fill
-      log(\`🎨 [Solid] Inserting into Slate editor...\`, '#c084fc');
-      await executeFlowStep(solid, 'Solid');
+      log(\`🎨 [Solid] Typing prompt into box...\`, '#c084fc');
+      const ok2 = await executeFlowStep(solid, 'Solid');
+      if (!ok2 && !botRunning) break;
 
       log(\`✅ Topic #\${item.id} complete! Both 2x Line Art & Solid saved.\`, '#4ade80');
       await sleep(3000);
@@ -229,7 +231,7 @@ const code = `// ==UserScript==
   async function executeFlowStep(promptText, styleType) {
     let slateEditor = findSlateEditor();
     if (!slateEditor) {
-      log(\`⚠️ Searching for Slate prompt box...\`, '#f59e0b');
+      log(\`⚠️ Looking for prompt box...\`, '#f59e0b');
       for (let a = 0; a < 8; a++) {
         await sleep(1000);
         slateEditor = findSlateEditor();
@@ -239,104 +241,100 @@ const code = `// ==UserScript==
 
     if (!slateEditor) {
       log(\`❌ Slate prompt box not found! Please click inside prompt bar.\`, '#ef4444');
-      return;
+      return false;
     }
+
+    const initialImgCount = document.querySelectorAll('img, canvas').length;
 
     // 1. Focus Slate Editor
     slateEditor.focus();
     slateEditor.click();
     await sleep(200);
 
-    // Clear existing text in Slate
+    // Clear and insert
     try {
       const sel = window.getSelection();
       const range = document.createRange();
       range.selectNodeContents(slateEditor);
       sel.removeAllRanges();
       sel.addRange(range);
+      document.execCommand('delete', false, null);
     } catch (e) {}
 
-    // 2. Insert text via Slate.js beforeinput & DataTransfer paste
-    try {
-      const dt = new DataTransfer();
-      dt.setData('text/plain', promptText);
-      slateEditor.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
-    } catch (e) {}
-
+    // Insert via Slate beforeinput
     slateEditor.dispatchEvent(new InputEvent('beforeinput', {
       bubbles: true,
       cancelable: true,
       inputType: 'insertText',
       data: promptText
     }));
-
     document.execCommand('insertText', false, promptText);
-
     slateEditor.dispatchEvent(new InputEvent('input', {
       bubbles: true,
       inputType: 'insertText',
       data: promptText
     }));
 
-    await sleep(500);
+    await sleep(400);
 
-    // 3. Trigger Enter key on Slate Editor
-    log('⌨️ Sending Enter key to Slate Editor...', '#38bdf8');
-    slateEditor.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Enter',
-      code: 'Enter',
-      keyCode: 13,
-      which: 13,
-      bubbles: true,
-      cancelable: true
-    }));
-    slateEditor.dispatchEvent(new KeyboardEvent('keypress', {
-      key: 'Enter',
-      code: 'Enter',
-      keyCode: 13,
-      which: 13,
-      bubbles: true,
-      cancelable: true
-    }));
-    slateEditor.dispatchEvent(new KeyboardEvent('keyup', {
-      key: 'Enter',
-      code: 'Enter',
-      keyCode: 13,
-      which: 13,
-      bubbles: true,
-      cancelable: true
-    }));
-
-    // 4. Also Click Submit Arrow Button (->)
-    log('🚀 Triggering Submit Arrow (->)...', '#a855f7');
+    // 2. Try Automatic Submit
+    log('🚀 Triggering Submit Arrow (->)...', '#38bdf8');
     clickSubmitArrow(slateEditor);
+    slateEditor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
 
-    log(\`⏳ Generating \${styleType} image (waiting ~24s)...\`, '#f59e0b');
-    await sleep(24000);
+    // 3. Wait for real image generation on canvas (Checking image count / progress)
+    log(\`⏳ Waiting for image generation to start...\`, '#f59e0b');
+    
+    let generationStarted = false;
+    for (let waitSec = 0; waitSec < 12; waitSec++) {
+      await sleep(1000);
+      const currentImgs = document.querySelectorAll('img, canvas').length;
+      // If prompt box cleared or new image appeared
+      if (currentImgs > initialImgCount || !slateEditor.textContent?.trim() || document.querySelector('div[class*="loading"], div[class*="spinner"], div[class*="progress"]')) {
+        generationStarted = true;
+        break;
+      }
+    }
 
-    // 5. Trigger 2x Upscale
-    log(\`🔍 Triggering 2x Upscale...\`, '#38bdf8');
+    if (!generationStarted) {
+      log(\`👉 Notice: If prompt is in box, please press ENTER or click (->) now!\`, '#f43f5e');
+      // Wait another 15s for user click or generation
+      for (let w = 0; w < 15; w++) {
+        await sleep(1000);
+        if (document.querySelectorAll('img, canvas').length > initialImgCount || !slateEditor.textContent?.trim()) {
+          generationStarted = true;
+          break;
+        }
+      }
+    }
+
+    log(\`⏳ Generating \${styleType} image (rendering on canvas)...\`, '#38bdf8');
+    // Wait until image is fully generated (approx 20s)
+    await sleep(22000);
+
+    // 4. Trigger 2x Upscale
+    log(\`🔍 Triggering 2x Upscale...\`, '#a855f7');
     triggerUpscale();
-    await sleep(9000);
+    await sleep(8000);
 
-    // 6. Trigger Download
+    // 5. Trigger Download
     log(\`💾 Triggering Download...\`, '#4ade80');
     triggerDownload();
-    await sleep(3000);
+    await sleep(4000);
+
+    return true;
   }
 
   function findSlateEditor() {
     return document.querySelector('div[data-slate-editor="true"]') ||
       document.querySelector('div[role="textbox"]') ||
-      document.querySelector('[contenteditable="true"]') ||
-      document.querySelector('textarea:not([hidden])');
+      document.querySelector('[contenteditable="true"]');
   }
 
   function clickSubmitArrow(slateEditor) {
     const pRect = slateEditor.getBoundingClientRect();
-    const candidates = Array.from(document.querySelectorAll('button, [role="button"], div[class*="button"], svg'));
+    const candidates = Array.from(document.querySelectorAll('button, [role="button"], div[class*="button"], svg, path'));
 
-    // Find the arrow button at bottom-right of prompt bar
     const arrow = candidates.find(el => {
       const rect = el.getBoundingClientRect();
       const isNearBottomRight = (rect.bottom >= pRect.bottom - 15) && (rect.bottom <= pRect.bottom + 80) && (rect.right >= pRect.right - 100);
@@ -440,4 +438,4 @@ const code = `// ==UserScript==
 const extDir = path.join(__dirname, '..', '..', 'flow-autopilot-extension');
 if (!fs.existsSync(extDir)) fs.mkdirSync(extDir, { recursive: true });
 fs.writeFileSync(path.join(extDir, 'content.js'), code);
-console.log('Successfully generated Slate.js native content.js!');
+console.log('Successfully updated content.js with real image detection!');
