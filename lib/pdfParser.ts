@@ -17,11 +17,10 @@ export async function parsePdfFile(file: File): Promise<TopicItem[]> {
       const page = await pdf.getPage(pageNum);
       const content = await page.getTextContent();
       
-      let pageText = '';
       for (const item of content.items as any[]) {
-        pageText += item.str + (item.hasEOL ? '\n' : ' ');
+        fullText += item.str + (item.hasEOL ? '\n' : ' ');
       }
-      fullText += pageText + '\n';
+      fullText += '\n';
     }
 
     return extractTopicsFromText(fullText);
@@ -36,55 +35,51 @@ export async function parsePdfFile(file: File): Promise<TopicItem[]> {
 export function extractTopicsFromText(rawText: string): TopicItem[] {
   if (!rawText || !rawText.trim()) return [];
 
-  // 1. First split by lookahead of numbered patterns (e.g. "1. ", "2. ", "100. ")
-  // This correctly splits even if an entire page is merged into a single line!
-  const chunks = rawText.split(/(?=\b\d{1,4}[\.\)\-]\s+)/g);
-  const topics: TopicItem[] = [];
-  let autoId = 1;
+  // Match all numbered topics: "1. Topic Name 2. Topic Name..."
+  const regex = /(?:^|\s+)(\d{1,4})[\.\)\-]\s+([\s\S]+?)(?=\s+\d{1,4}[\.\)\-]|$)/g;
+  const matches = [...rawText.matchAll(regex)];
 
-  for (const chunk of chunks) {
-    const trimmed = chunk.trim();
-    if (!trimmed) continue;
+  if (matches.length > 0) {
+    const topics: TopicItem[] = [];
+    const seenIds = new Set<number>();
 
-    // Check if starts with a number like "1. Business Strategy & Management"
-    const match = trimmed.match(/^(\d{1,4})[\.\)\-]?\s+([^\n\r]+)/);
-    if (match) {
-      const parsedId = parseInt(match[1], 10);
-      const title = match[2]
+    for (const match of matches) {
+      const id = parseInt(match[1], 10);
+      let title = match[2]
+        .replace(/[\r\n]+/g, ' ')
         .replace(/\s+/g, ' ')
         .replace(/\s*page\s*\d+\s*$/i, '')
         .trim();
 
-      if (title.length > 1) {
+      if (title.length > 1 && !seenIds.has(id)) {
+        seenIds.add(id);
         topics.push({
-          id: isNaN(parsedId) ? autoId++ : parsedId,
+          id,
           topic: title,
           status: 'pending'
         });
       }
-    } else {
-      // Fallback for lines without numbers
-      const sublines = trimmed.split(/\r?\n/);
-      for (const s of sublines) {
-        const sTrimmed = s.trim();
-        if (sTrimmed.length > 3 && !sTrimmed.toLowerCase().startsWith('page ')) {
-          topics.push({
-            id: autoId++,
-            topic: sTrimmed,
-            status: 'pending'
-          });
-        }
-      }
+    }
+
+    if (topics.length > 0) {
+      return topics.sort((a, b) => a.id - b.id);
     }
   }
 
-  // Remove duplicates by ID and sort ascending
-  const uniqueMap = new Map<number, TopicItem>();
-  for (const t of topics) {
-    if (!uniqueMap.has(t.id)) {
-      uniqueMap.set(t.id, t);
-    }
+  // Fallback line-by-line parser for unnumbered lists
+  const lines = rawText.split(/\r?\n/);
+  const fallbackTopics: TopicItem[] = [];
+  let autoId = 1;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.toLowerCase().startsWith('page ')) continue;
+    fallbackTopics.push({
+      id: autoId++,
+      topic: trimmed,
+      status: 'pending'
+    });
   }
 
-  return Array.from(uniqueMap.values()).sort((a, b) => a.id - b.id);
+  return fallbackTopics;
 }
