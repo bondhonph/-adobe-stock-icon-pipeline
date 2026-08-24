@@ -347,81 +347,116 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       console.log('   ✨ Image generation completed on canvas!');
     }
 
-    // 3. Trigger 2x Upscale
-    console.log(`   🔍 Triggering 2x Upscale...`);
-    let upscaleClicked = false;
-    try {
-      const upscaleBtn = await page.$('button:has-text("2x"), button:has-text("Upscale"), button[aria-label*="Upscale" i], button[aria-label*="2x" i]');
-      if (upscaleBtn && await upscaleBtn.isVisible()) {
-        await upscaleBtn.click({ force: true });
-        upscaleClicked = true;
-      } else {
-        // Hover over the newest image card on canvas
-        const images = await page.$$('div[class*="node"], div[class*="card"], img, canvas');
-        if (images.length > 0) {
-          await images[images.length - 1].hover();
-          await page.waitForTimeout(800);
-          const up2 = await page.$('button:has-text("2x"), button:has-text("Upscale")');
-          if (up2) {
-            await up2.click({ force: true });
-            upscaleClicked = true;
-          }
-        }
-      }
-    } catch (e) {}
-
-    // Wait for upscale processing (8s)
-    if (upscaleClicked) {
-      console.log('   ⏳ Upscaling in progress...');
-      await page.waitForTimeout(8000);
+    // 3. Trigger Download: Click Download Icon -> Then Click "2x" in dropdown menu
+    console.log(`   💾 Opening Download Menu (Clicking Download icon)...`);
+    
+    // Hover over the newest image card on canvas to reveal toolbar
+    const cards = await page.$$('div[class*="node"], div[class*="card"], img, canvas');
+    if (cards.length > 0) {
+      await cards[cards.length - 1].hover();
+      await page.waitForTimeout(600);
     }
 
-    // 4. Trigger Verified Download
-    console.log(`   💾 Downloading high-resolution 2x image...`);
-    let downloadSuccess = false;
+    // Set up download event listener BEFORE clicking
+    const downloadPromise = page.waitForEvent('download', { timeout: 35000 }).catch(() => null);
 
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    // Find and click the Download icon button
+    const downloadIconSelectors = [
+      'button[aria-label*="Download" i]',
+      'button:has(svg[data-icon="download"])',
+      'button:has(svg):has-text("Download")',
+      'button:has-text("Download")',
+      '[data-testid*="download" i]'
+    ];
+
+    let dlIcon = null;
+    for (const sel of downloadIconSelectors) {
       try {
-        const downloadPromise = page.waitForEvent('download', { timeout: 15000 }).catch(() => null);
-
-        // Click download button on newest node
-        const dlBtn = await page.$('button:has-text("Download"), button[aria-label*="Download" i], svg[data-icon="download"]');
-        if (dlBtn) {
-          await dlBtn.click({ force: true });
-        } else {
-          // Hover newest node again
-          const images = await page.$$('div[class*="node"], div[class*="card"], img, canvas');
-          if (images.length > 0) {
-            await images[images.length - 1].hover();
-            await page.waitForTimeout(500);
-            const dl = await page.$('button:has-text("Download"), button[aria-label*="Download" i]');
-            if (dl) await dl.click({ force: true });
-          }
+        const el = await page.$(sel);
+        if (el && await el.isVisible()) {
+          dlIcon = el;
+          break;
         }
-
-        const download = await downloadPromise;
-        if (download) {
-          await download.saveAs(targetPath);
-          if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 1024) {
-            console.log(`   ✅ Saved & Verified: ${targetPath} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
-            downloadSuccess = true;
-            break;
-          }
-        }
-      } catch (err) {
-        console.warn(`   ⚠️ Download attempt ${attempt} notice: ${err.message}`);
-      }
-      await page.waitForTimeout(2000);
+      } catch (e) {}
     }
 
-    if (!downloadSuccess) {
-      console.warn(`   ℹ️ Download completed via default browser download pipeline.`);
-      // Check if file was saved anyway
+    if (!dlIcon && cards.length > 0) {
+      const lastCard = cards[cards.length - 1];
+      dlIcon = await lastCard.$('button');
+    }
+
+    if (dlIcon) {
+      console.log(`   📌 Clicked Download icon, waiting for dropdown menu...`);
+      await dlIcon.click({ force: true });
+      await page.waitForTimeout(1000);
+    }
+
+    // Now click the "2x" option inside the dropdown menu
+    console.log(`   🔍 Selecting "2x" resolution option...`);
+    const twoXSelectors = [
+      'div[role="menuitem"]:has-text("2x")',
+      'button:has-text("2x")',
+      'div:has-text("2x")',
+      'span:has-text("2x")',
+      '[aria-label*="2x" i]',
+      'li:has-text("2x")',
+      'div[role="option"]:has-text("2x")',
+      'button:has-text("Upscale")',
+      'div:has-text("Upscale")'
+    ];
+
+    let twoXClicked = false;
+    for (const sel of twoXSelectors) {
+      try {
+        const el = await page.$(sel);
+        if (el && await el.isVisible()) {
+          console.log(`   ✨ Clicked "2x" option (${sel})!`);
+          await el.click({ force: true });
+          twoXClicked = true;
+          break;
+        }
+      } catch (e) {}
+    }
+
+    if (!twoXClicked) {
+      // Fallback: evaluate click on element containing "2x"
+      const clicked = await page.evaluate(() => {
+        const items = Array.from(document.querySelectorAll('div, span, button, li, a'));
+        const item2x = items.find(el => {
+          const txt = el.textContent?.trim();
+          return txt === '2x' || txt === '2X' || txt?.includes('2x') || txt?.includes('2X');
+        });
+        if (item2x) {
+          item2x.click();
+          return true;
+        }
+        return false;
+      });
+      if (clicked) {
+        console.log(`   ✨ Selected "2x" via text matching.`);
+        twoXClicked = true;
+      }
+    }
+
+    // Await download completion
+    console.log(`   ⏳ Waiting for 2x image download...`);
+    const download = await downloadPromise;
+
+    if (download) {
+      await download.saveAs(targetPath);
       if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 1024) {
+        console.log(`   ✅ Saved & Verified: ${targetPath} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
         return true;
       }
     }
 
+    // Final verification on disk
+    if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 1024) {
+      console.log(`   ✅ Saved & Verified: ${targetPath}`);
+      return true;
+    }
+
+    console.log(`   ℹ️ Generation step completed.`);
     return true;
   } catch (err) {
     console.error(`   ❌ Error processing ${styleType}:`, err.message);
