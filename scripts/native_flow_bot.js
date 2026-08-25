@@ -657,50 +657,80 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       await page.waitForTimeout(800);
     }
 
-    // STATE 3: UPSCALE_REQUESTED -> Click 2K Option & Trigger Upscaling
-    let upscaleTriggered = false;
+    // STATE 3: SELECT 2K RESOLUTION & VERIFY UPSCALE INITIATION
+    console.log(`   [UPSCALE] Selecting "2K" (Upscaled) option...`);
+    let upscaleInitiated = false;
     const upscaleStartTime = Date.now();
     let downloadEventPromise = page.waitForEvent('download', { timeout: 120000 }).catch(() => null);
 
-    console.log(`   [UPSCALE] Selecting "2K" (Upscaled) option...`);
-    for (let try2k = 1; try2k <= 4; try2k++) {
-      // Find element containing "2K"
-      const opt2KHandle = await page.evaluateHandle(() => {
-        const all = Array.from(document.querySelectorAll('div, span, button, label, li, p, a'));
-        return all.find(el => {
-          const t = el.textContent?.trim() || '';
-          const has2K = t.includes('2K') || t.includes('2k') || t.includes('2x') || t.includes('2X');
-          const notOther = !t.includes('4K') && !t.includes('1K') && !t.includes('Upgrade');
-          return has2K && notOther && el.offsetParent !== null;
-        }) || null;
+    for (let try2k = 1; try2k <= 5; try2k++) {
+      // 1. Locate the 2K row element using Playwright locators & DOM text inspection
+      const clicked = await page.evaluate(() => {
+        // Find all clickable elements inside any popover/menu
+        const elements = Array.from(document.querySelectorAll('button, [role="button"], [role="menuitem"], div[class*="item"], div[class*="option"], div, span'));
+        
+        // Find element that represents the 2K option
+        const targetRow = elements.find(el => {
+          const text = (el.innerText || el.textContent || '').trim();
+          const is2K = text.startsWith('2K') || text === '2K\nUpscaled' || text === '2K Upscaled';
+          const notOther = !text.includes('4K') && !text.includes('1K') && !text.includes('Upgrade');
+          return is2K && notOther && el.offsetParent !== null;
+        });
+
+        if (targetRow) {
+          targetRow.scrollIntoView?.();
+          targetRow.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+          targetRow.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+          targetRow.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
+          targetRow.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+          targetRow.click();
+          return true;
+        }
+        return false;
       });
 
-      if (opt2KHandle && opt2KHandle.asElement()) {
-        const box = await opt2KHandle.asElement().boundingBox();
-        if (box) {
-          await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-          await page.waitForTimeout(100);
-          await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-          await opt2KHandle.asElement().click({ force: true }).catch(() => {});
-          upscaleTriggered = true;
-          console.log(`   [UPSCALE] Requested: "2K" option clicked successfully.`);
-          break;
+      // 2. Playwright physical mouse click fallback on text="2K"
+      if (!clicked) {
+        const opt2KLocator = page.locator('text=2K').first();
+        if (await opt2KLocator.isVisible().catch(() => false)) {
+          const box = await opt2KLocator.boundingBox();
+          if (box) {
+            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+            await page.waitForTimeout(100);
+            await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+          }
         }
       }
 
-      // Positional click fallback ~105px directly below download button
-      if (!upscaleTriggered && downloadButtonBox) {
-        await page.mouse.click(downloadButtonBox.x + downloadButtonBox.width / 2, downloadButtonBox.y + 105);
-        await page.waitForTimeout(800);
+      await page.waitForTimeout(1500);
+
+      // 3. Confirm upscale was initiated by checking for toast or dropdown disappearance
+      upscaleInitiated = await page.evaluate(() => {
+        const text = document.body?.innerText || '';
+        return text.includes('Upscaling your image') || text.includes('download will start') || text.includes('Upscaling complete');
+      });
+
+      if (upscaleInitiated) {
+        console.log(`   [UPSCALE] 2K requested & confirmed: Upscaling in progress on Google Flow...`);
+        break;
       }
 
-      await page.waitForTimeout(600);
+      // If dropdown closed but toast hasn't appeared yet, check if download dropdown needs re-opening
+      const dropdownStillOpen = await page.evaluate(() => {
+        const text = document.body?.innerText || '';
+        return text.includes('Original size') || text.includes('Upscaled');
+      });
+
+      if (!dropdownStillOpen && downloadButtonBox) {
+        // Re-open download dropdown for next attempt
+        await page.mouse.click(downloadButtonBox.x + downloadButtonBox.width / 2, downloadButtonBox.y + downloadButtonBox.height / 2);
+        await page.waitForTimeout(1000);
+      }
     }
 
-    // STATE 4 & 5: WAITING_FOR_UPSCALE & UPSCALE_CONFIRMED
-    console.log(`   [UPSCALE] Waiting for upscale completion & 2K download stream...`);
+    // STATE 4: WAITING FOR REAL 2K UPSCALE & DOWNLOAD STREAM
+    console.log(`   [UPSCALE] Waiting for real upscale completion & 2K download stream...`);
     let downloadSuccess = false;
-    let capturedFile = null;
     const maxUpscaleWaitMs = 120000; // 2 minutes max safety limit
 
     while (Date.now() - upscaleStartTime < maxUpscaleWaitMs) {
@@ -714,17 +744,17 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
 
       if (downloadEvent && downloadEvent !== 'POLLING') {
         try {
-          console.log(`   [DOWNLOAD] Browser download event captured. Saving to: ${targetPath}`);
+          console.log(`   [DOWNLOAD] 2K download event detected from browser. Saving to: ${targetPath}`);
           await downloadEvent.saveAs(targetPath);
           if (fs.existsSync(targetPath)) {
-            // STATE 7: VERIFY_FILE stability
+            // STATE 5: VERIFY FILE STABILITY
             let size1 = fs.statSync(targetPath).size;
             await page.waitForTimeout(1000);
             let size2 = fs.statSync(targetPath).size;
 
-            if (size2 >= size1 && size2 > 102400) { // Verified > 100KB (typically ~1.8MB)
+            if (size2 >= size1 && size2 > 512000) { // Verified genuine 2K upscale (>500KB, typically ~1.8MB)
               const sizeKB = Math.round(size2 / 1024);
-              console.log(`   [SUCCESS] Verified as current 2K upscale output: ${targetPath} (${sizeKB} KB in ${elapsedSec}s)`);
+              console.log(`   [SUCCESS] REAL 2K UPSCALED IMAGE SAVED: ${targetPath} (${sizeKB} KB in ${elapsedSec}s)`);
               downloadSuccess = true;
               break;
             }
@@ -746,18 +776,18 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
               if (!file.endsWith('.jpeg') && !file.endsWith('.jpg') && !file.endsWith('.png')) continue;
 
               const stat = fs.statSync(fullFilePath);
-              // Must be created/modified after upscale started, and larger than 500KB (2K upscaled)
-              if (stat.mtimeMs >= upscaleStartTime - 3000 && stat.size > 307200) {
-                // STATE 7: File size stability check
+              // Must be created/modified after upscale started, and larger than 500KB (genuine 2K)
+              if (stat.mtimeMs >= upscaleStartTime - 3000 && stat.size > 512000) {
+                // Verify file size stability (write complete)
                 const initialSize = stat.size;
                 await page.waitForTimeout(1000);
                 const recheckStat = fs.statSync(fullFilePath);
 
                 if (recheckStat.size === initialSize) {
                   fs.copyFileSync(fullFilePath, targetPath);
-                  if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 307200) {
+                  if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 512000) {
                     const finalSizeKB = Math.round(fs.statSync(targetPath).size / 1024);
-                    console.log(`\n   [SUCCESS] Captured & Verified 2K File from ${path.basename(dir)} in ${elapsedSec}s: ${targetPath} (${finalSizeKB} KB)`);
+                    console.log(`\n   [SUCCESS] REAL 2K UPSCALED IMAGE SAVED: ${targetPath} (${finalSizeKB} KB in ${elapsedSec}s)`);
                     downloadSuccess = true;
                     break;
                   }
@@ -775,12 +805,14 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       const toastStatus = await page.evaluate(() => {
         const text = document.body?.innerText || '';
         if (text.includes('Upscaling your image') || text.includes('download will start')) return 'UPSCALING';
-        if (text.includes('Upscaling complete')) return 'COMPLETE';
+        if (text.includes('Upscaling complete') || text.includes('downloaded')) return 'COMPLETE';
         return 'IDLE';
       });
 
       if (toastStatus === 'UPSCALING') {
         process.stdout.write(`\r   [UPSCALE] In progress on Google Flow... (${elapsedSec}s elapsed)`);
+      } else if (toastStatus === 'COMPLETE') {
+        process.stdout.write(`\r   [UPSCALE] Upscale completed! Capturing 2K file stream... (${elapsedSec}s elapsed)`);
       } else {
         process.stdout.write(`\r   [DOWNLOAD] Waiting for 2K file stream... (${elapsedSec}s elapsed)`);
       }
@@ -788,75 +820,20 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
 
     console.log(''); // newline
 
-    // Fallback: If 2K upscale download didn't complete within 120s, perform high-resolution extraction
-    if (!downloadSuccess && (!fs.existsSync(targetPath) || fs.statSync(targetPath).size <= 10240)) {
-      console.warn(`   [ERROR] Upscale download timed out. Executing high-resolution canvas extraction fallback...`);
-      try {
-        const base64Data = await page.evaluate(async (targetSrc) => {
-          const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
-            const src = img.currentSrc || img.src || '';
-            return src.includes('googleusercontent.com') || src.startsWith('blob:') || src.startsWith('data:') || src.includes('labs.google');
-          });
-
-          const bigImg = imgs.reduce((best, img) => {
-            return (!best || (img.naturalWidth || 0) > (best.naturalWidth || 0)) ? img : best;
-          }, null);
-
-          const targetImg = bigImg || (targetSrc ? imgs.find(i => (i.currentSrc || i.src) === targetSrc) : null) || imgs[imgs.length - 1];
-          if (targetImg) {
-            let url = targetImg.currentSrc || targetImg.src;
-            if (url.includes('googleusercontent.com')) {
-              url = url.replace(/=s\d+/g, '=s2048').replace(/=w\d+-h\d+/g, '=w2048-h2048');
-              if (!url.includes('=s') && !url.includes('=w')) {
-                url += (url.includes('?') ? '&' : '?') + '=s2048';
-              }
-            }
-
-            try {
-              const res = await fetch(url);
-              const blob = await res.blob();
-              return new Promise((resolve) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(reader.result);
-                reader.readAsDataURL(blob);
-              });
-            } catch (e) {
-              const canvas = document.createElement('canvas');
-              canvas.width = 2048;
-              canvas.height = 2048;
-              const ctx = canvas.getContext('2d');
-              ctx.imageSmoothingEnabled = true;
-              ctx.imageSmoothingQuality = 'high';
-              ctx.drawImage(targetImg, 0, 0, 2048, 2048);
-              return canvas.toDataURL('image/jpeg', 0.98);
-            }
-          }
-          return null;
-        }, newImageSrc);
-
-        if (base64Data && base64Data.includes('base64,')) {
-          const dataBuffer = Buffer.from(base64Data.split('base64,')[1], 'base64');
-          if (dataBuffer.length > 10240) {
-            fs.writeFileSync(targetPath, dataBuffer);
-            console.log(`   [FALLBACK] Saved extracted 2K image: ${targetPath} (${Math.round(dataBuffer.length / 1024)} KB)`);
-            downloadSuccess = true;
-          }
-        }
-      } catch (extractErr) {
-        console.warn(`   ⚠️ Extraction notice: ${extractErr.message}`);
-      }
+    // If real 2K download was not received, fail clearly (NO canvas extraction fallback)
+    if (!downloadSuccess || !fs.existsSync(targetPath) || fs.statSync(targetPath).size < 512000) {
+      console.error(`   [ERROR] REAL 2K UPSCALE COMPLETION NOT DETECTED: No verified 2K download received (>500KB) within 120s.`);
+      console.error(`   [ERROR] File was NOT saved as 2K. Step failed.`);
     }
 
-    // STATE 8: SUCCESS -> Exit Edit Mode back to Main Canvas Grid
+    // STATE 6: Exit Edit Mode back to Main Canvas Grid
     await exitEditMode(page);
 
-    // Final verification on disk
-    if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
-      console.log(`   [SUCCESS] Step Complete: ${fileName} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
+    // Final verification on disk: Must be genuine 2K upscale (>500KB)
+    if (downloadSuccess && fs.existsSync(targetPath) && fs.statSync(targetPath).size > 512000) {
       return true;
     }
 
-    console.warn(`   ❌ File verification failed for ${fileName}`);
     try {
       await page.screenshot({ path: path.join(AUTO_DOWNLOAD_DIR, `_debug_failed_${styleType}.png`), fullPage: false });
     } catch (e) {}
