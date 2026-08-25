@@ -471,114 +471,152 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       }
     }
 
-    // 5. Trigger Official 2x Upscale & Download
-    console.log(`   🔍 Triggering 2x Upscale on Canvas...`);
-    
-    // Set up download event listener (12s timeout)
-    const downloadPromise = page.waitForEvent('download', { timeout: 12000 }).catch(() => null);
+    // 5. Click on the new card to enter Edit Mode (2x download is ONLY available in Edit Mode)
+    console.log(`   🖱️ Clicking card to enter Edit Mode for 2x download...`);
 
-    // Hover over newest image/card and click Upscale / 2x
     try {
-      // Find all image elements and card containers
-      const cardHandles = await page.$$('div[class*="node"], div[class*="card"], div[class*="image-container"], div[class*="nodeWrapper"], div[class*="react-flow__node"]');
-      const imgHandles = await page.$$('img');
-
-      const targetHandle = cardHandles[cardHandles.length - 1] || imgHandles[imgHandles.length - 1];
-
-      if (targetHandle) {
-        const box = await targetHandle.boundingBox();
-        if (box) {
-          // Move mouse physically over the card to trigger hover toolbar
-          await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-          await page.waitForTimeout(300);
-          await page.mouse.move(box.x + box.width - 20, box.y + 20);
-          await page.waitForTimeout(400);
-        }
+      // Find and click the newest image card to open Edit Mode
+      const allImgs = await page.$$('img');
+      if (allImgs.length > 0) {
+        const lastImg = allImgs[allImgs.length - 1];
+        await lastImg.click({ force: true });
+        await page.waitForTimeout(3000);
       }
-
-      // Check 1: Direct Upscale / 2x button on card toolbar
-      const upscaleClicked = await page.evaluate(() => {
-        const allEls = Array.from(document.querySelectorAll('button, div, span, li, a'));
-        const uBtn = allEls.find(el => {
-          const t = el.textContent?.trim().toLowerCase();
-          const aria = el.getAttribute('aria-label')?.toLowerCase() || '';
-          return (t === '2x' || t === 'upscale' || t === 'enhance' || t === '2x upscale' || aria.includes('upscale') || aria.includes('2x') || aria.includes('enhance')) && el.offsetParent !== null;
-        });
-        if (uBtn) {
-          uBtn.click();
-          return true;
-        }
-        return false;
-      });
-
-      if (upscaleClicked) {
-        console.log(`   ✨ Clicked Upscale (2x) button!`);
-        await page.waitForTimeout(7000);
-      } else {
-        // Check 2: 3-dot Menu (⋮) on card
-        await page.evaluate(() => {
-          const btns = Array.from(document.querySelectorAll('button, [role="button"], div[class*="menu"], svg'));
-          const threeDots = btns.find(b => {
-            const aria = b.getAttribute('aria-label')?.toLowerCase() || '';
-            const t = b.textContent?.trim();
-            return (aria.includes('more') || aria.includes('options') || aria.includes('menu') || t === '⋮' || t === '...') && b.offsetParent !== null;
-          });
-          if (threeDots) threeDots.click();
-        });
-        await page.waitForTimeout(400);
-
-        // Look for Upscale or Download in menu
-        await page.evaluate(() => {
-          const items = Array.from(document.querySelectorAll('div[role="menuitem"], button, div, span, li, a'));
-          const up = items.find(el => {
-            const t = el.textContent?.trim().toLowerCase();
-            return t?.includes('upscale') || t?.includes('2x') || t?.includes('enhance');
-          });
-          if (up) up.click();
-        });
-        await page.waitForTimeout(1000);
-      }
-
-      // Step 3: Trigger Download
-      await page.evaluate(() => {
-        const items = Array.from(document.querySelectorAll('div[role="menuitem"], button, div, span, li, a'));
-        const dl = items.find(el => {
-          const t = el.textContent?.trim().toLowerCase();
-          const aria = el.getAttribute('aria-label')?.toLowerCase() || '';
-          return (t === 'download' || aria.includes('download') || el.querySelector('svg[data-icon="download" i]')) && el.offsetParent !== null;
-        });
-        if (dl) {
-          dl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-          dl.click();
-        }
-      });
-      await page.waitForTimeout(500);
-
-      // In resolution picker modal/menu, click 2x
-      await page.evaluate(() => {
-        const items = Array.from(document.querySelectorAll('div[role="menuitem"], button, div, span, li, a'));
-        const opt2x = items.find(el => {
-          const t = el.textContent?.trim();
-          return (t === '2x' || t === '2X' || t?.includes('2x') || t?.includes('2X')) && el.offsetParent !== null;
-        });
-        if (opt2x) opt2x.click();
-      });
     } catch (e) {}
 
-    // Check if official 2x download started
+    // Wait for Edit Mode to load (URL changes to /edit/ or page shows "What do you want to change?")
+    let inEditMode = false;
+    for (let w = 0; w < 8; w++) {
+      if (page.url().includes('/edit/')) {
+        inEditMode = true;
+        break;
+      }
+      // Also check for edit-mode UI elements
+      const hasEditUI = await page.evaluate(() => {
+        const els = Array.from(document.querySelectorAll('input, div, textarea'));
+        return els.some(el => {
+          const ph = el.getAttribute('placeholder')?.toLowerCase() || '';
+          return ph.includes('change') || ph.includes('edit');
+        });
+      });
+      if (hasEditUI) { inEditMode = true; break; }
+      await page.waitForTimeout(500);
+    }
+
+    if (!inEditMode) {
+      // Try double-clicking card
+      console.log(`   ⚠️ Edit mode not detected, trying double-click...`);
+      const allImgs2 = await page.$$('img');
+      if (allImgs2.length > 0) {
+        await allImgs2[allImgs2.length - 1].dblclick({ force: true }).catch(() => {});
+        await page.waitForTimeout(3000);
+      }
+    }
+
+    // 6. Inside Edit Mode: Click Download (↓) button in top-right toolbar → Select 2x
+    console.log(`   🔍 Finding Download button in Edit Mode toolbar...`);
+
+    // Set up download event listener
+    const downloadPromise = page.waitForEvent('download', { timeout: 15000 }).catch(() => null);
+
+    try {
+      // The download button (↓) is in the top-right toolbar area
+      // Try aria-label based selector first
+      let dlBtn = await page.$('button[aria-label*="Download" i], button[aria-label*="download" i]');
+
+      if (!dlBtn) {
+        // Find by SVG download icon or by position in top-right area
+        dlBtn = await page.evaluate(() => {
+          const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+          const downloadBtn = btns.find(b => {
+            const aria = b.getAttribute('aria-label')?.toLowerCase() || '';
+            const hasDlSvg = !!b.querySelector('svg path[d*="M19"], svg path[d*="download"]');
+            const rect = b.getBoundingClientRect();
+            // Download button is in top-right area (y < 120, x > 60% of viewport)
+            const isTopRight = rect.top < 120 && rect.left > window.innerWidth * 0.6;
+            return (aria.includes('download') || hasDlSvg) && isTopRight;
+          });
+          if (downloadBtn) {
+            downloadBtn.click();
+            return true;
+          }
+          return false;
+        });
+
+        if (!dlBtn) {
+          // Fallback: Click all buttons in the top-right header area to find download
+          await page.evaluate(() => {
+            const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+            const topBtns = btns.filter(b => {
+              const r = b.getBoundingClientRect();
+              return r.top < 120 && r.left > window.innerWidth * 0.55 && r.width < 60;
+            }).sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+            // Download icon is typically the 2nd icon in the top-right group
+            // (heart, download, delete, share, hide history, Done)
+            if (topBtns.length >= 2) {
+              topBtns[1].click(); // download is usually 2nd button
+            }
+          });
+        }
+      } else {
+        await dlBtn.click({ force: true });
+      }
+
+      await page.waitForTimeout(800);
+
+      // Now a resolution picker should appear → Click "2x" or "2X"
+      console.log(`   📐 Selecting 2x resolution...`);
+      await page.evaluate(() => {
+        const items = Array.from(document.querySelectorAll('div, span, button, li, a, label'));
+        const opt2x = items.find(el => {
+          const t = el.textContent?.trim();
+          return (t === '2x' || t === '2X' || t === '2048' || t === '2048 × 2048' || t?.includes('2x') || t?.includes('2X')) && el.offsetParent !== null;
+        });
+        if (opt2x) {
+          opt2x.click();
+          return;
+        }
+        // If no 2x picker, look for the highest resolution option
+        const resOptions = items.filter(el => {
+          const t = el.textContent?.trim();
+          return t && /\d+\s*[x×]\s*\d+/.test(t) && el.offsetParent !== null;
+        });
+        if (resOptions.length > 0) {
+          resOptions[resOptions.length - 1].click(); // last = highest res
+        }
+      });
+      await page.waitForTimeout(1000);
+
+      // Click confirm/download button if there is one
+      await page.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll('button'));
+        const confirmBtn = btns.find(b => {
+          const t = b.textContent?.trim().toLowerCase();
+          return (t === 'download' || t === 'save' || t === 'confirm' || t === 'ok') && b.offsetParent !== null;
+        });
+        if (confirmBtn) confirmBtn.click();
+      });
+
+    } catch (e) {
+      console.warn(`   ⚠️ Download click notice: ${e.message}`);
+    }
+
+    // Wait for download event
     const download = await downloadPromise;
     if (download) {
       try {
         await download.saveAs(targetPath);
         if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
-          console.log(`   ✅ 2x Verified Download Saved: ${targetPath} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
+          console.log(`   ✅ 2x Download Saved: ${targetPath} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
+          // Go back to Main Canvas
+          await exitEditMode(page);
           return true;
         }
       } catch (e) {}
     }
 
-    // 6. Direct High-Resolution 2K (2048x2048) Buffer Extraction Fallback
-    console.log(`   🔄 Extracting Full 2K 2048x2048 Image Buffer from Canvas...`);
+    // 7. Fallback: Extract high-res 2K image from browser memory
+    console.log(`   🔄 Fallback: Extracting 2K image from browser...`);
     try {
       const base64Data = await page.evaluate(async (targetSrc) => {
         const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
@@ -586,12 +624,20 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
           return src.includes('googleusercontent.com') || src.startsWith('blob:') || src.startsWith('data:') || src.includes('labs.google');
         });
 
-        const targetImg = (targetSrc ? imgs.find(i => (i.currentSrc || i.src) === targetSrc) : null) || imgs[imgs.length - 1];
+        // In edit mode, the main large image is the one we want
+        const bigImg = imgs.reduce((best, img) => {
+          return (!best || (img.naturalWidth || 0) > (best.naturalWidth || 0)) ? img : best;
+        }, null);
+
+        const targetImg = bigImg || (targetSrc ? imgs.find(i => (i.currentSrc || i.src) === targetSrc) : null) || imgs[imgs.length - 1];
         if (targetImg) {
           let url = targetImg.currentSrc || targetImg.src;
-          // Upgrade googleusercontent URL to 2K (2048px)
-          if (url.includes('googleusercontent.com') && url.includes('=')) {
+          // Upgrade googleusercontent URL to max resolution
+          if (url.includes('googleusercontent.com')) {
             url = url.replace(/=s\d+/g, '=s2048').replace(/=w\d+-h\d+/g, '=w2048-h2048');
+            if (!url.includes('=s') && !url.includes('=w')) {
+              url += (url.includes('?') ? '&' : '?') + '=s2048';
+            }
           }
 
           try {
@@ -621,12 +667,16 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
         if (dataBuffer.length > 10240) {
           fs.writeFileSync(targetPath, dataBuffer);
           console.log(`   ✅ Saved 2K High-Res Image: ${targetPath} (${Math.round(dataBuffer.length / 1024)} KB)`);
+          await exitEditMode(page);
           return true;
         }
       }
     } catch (extractErr) {
       console.warn(`   ⚠️ Extraction notice: ${extractErr.message}`);
     }
+
+    // Go back to Main Canvas regardless
+    await exitEditMode(page);
 
     // Final verification on disk
     if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
@@ -638,7 +688,44 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     return false;
   } catch (err) {
     console.error(`   ❌ Error processing ${styleType}:`, err.message);
+    await exitEditMode(page).catch(() => {});
     return false;
+  }
+}
+
+// ==============================================================================
+// EXIT EDIT MODE → RETURN TO MAIN CANVAS GRID
+// ==============================================================================
+async function exitEditMode(page) {
+  if (!page.url().includes('/edit/')) return;
+
+  console.log(`   ↩️ Returning to Main Canvas Grid...`);
+  try {
+    // Click "Done" button (top-right corner)
+    const doneBtn = await page.$('button:has-text("Done")');
+    if (doneBtn) {
+      await doneBtn.click({ force: true });
+      await page.waitForTimeout(2000);
+      if (!page.url().includes('/edit/')) return;
+    }
+
+    // Click Back arrow (←) at top-left
+    const backBtn = await page.$('button[aria-label*="Back" i], a[aria-label*="Back" i]');
+    if (backBtn) {
+      await backBtn.click({ force: true });
+      await page.waitForTimeout(2000);
+      if (!page.url().includes('/edit/')) return;
+    }
+
+    // Navigate directly to main project URL
+    const mainUrl = page.url().split('/edit/')[0];
+    await page.goto(mainUrl, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(3000);
+
+    // Re-wait for editor
+    await page.waitForSelector('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]', { timeout: 15000 }).catch(() => {});
+  } catch (e) {
+    console.warn(`   ⚠️ Exit edit mode notice: ${e.message}`);
   }
 }
 
