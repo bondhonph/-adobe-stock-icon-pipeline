@@ -12,7 +12,7 @@ const AUTO_DOWNLOAD_DIR = path.join(WORKSPACE_DIR, 'Auto-Download');
 const PROGRESS_FILE = path.join(APP_DIR, 'data', 'pipeline_progress.json');
 const TOPICS_FILE = path.join(APP_DIR, 'public', 'topics.json');
 
-// Ensure Auto-Download is a valid directory
+// Ensure Auto-Download directory exists
 try {
   if (fs.existsSync(AUTO_DOWNLOAD_DIR) && !fs.statSync(AUTO_DOWNLOAD_DIR).isDirectory()) {
     fs.unlinkSync(AUTO_DOWNLOAD_DIR);
@@ -75,8 +75,8 @@ function isTopicFullyCompleted(topicId, topicName) {
   const lineArtPath = path.join(AUTO_DOWNLOAD_DIR, `${topicId}_${cleanTopic}_LineArt.jpeg`);
   const solidPath = path.join(AUTO_DOWNLOAD_DIR, `${topicId}_${cleanTopic}_Solid.jpeg`);
 
-  const hasLineArt = fs.existsSync(lineArtPath) && fs.statSync(lineArtPath).size > 1024;
-  const hasSolid = fs.existsSync(solidPath) && fs.statSync(solidPath).size > 1024;
+  const hasLineArt = fs.existsSync(lineArtPath) && fs.statSync(lineArtPath).size > 10240;
+  const hasSolid = fs.existsSync(solidPath) && fs.statSync(solidPath).size > 10240;
 
   return hasLineArt && hasSolid;
 }
@@ -181,7 +181,7 @@ async function runNativeAutoPilot() {
 
     // STEP 1: Generate Line Art -> Immediately Download & Save Line Art
     let lineArtSuccess = false;
-    if (!fs.existsSync(lineArtTarget) || fs.statSync(lineArtTarget).size < 1024) {
+    if (!fs.existsSync(lineArtTarget) || fs.statSync(lineArtTarget).size < 10240) {
       console.log(`🎨 [1/2] Processing Line Art (Generate ➡️ Download)...`);
       lineArtSuccess = await processFlowGeneration(page, lineArt, 'Line Art', AUTO_DOWNLOAD_DIR, lineArtFileName);
     } else {
@@ -194,7 +194,7 @@ async function runNativeAutoPilot() {
 
     // STEP 2: Generate Solid Fill -> Immediately Download & Save Solid Fill
     let solidSuccess = false;
-    if (!fs.existsSync(solidTarget) || fs.statSync(solidTarget).size < 1024) {
+    if (!fs.existsSync(solidTarget) || fs.statSync(solidTarget).size < 10240) {
       console.log(`🎨 [2/2] Processing Solid Fill (Generate ➡️ Download)...`);
       solidSuccess = await processFlowGeneration(page, solid, 'Solid', AUTO_DOWNLOAD_DIR, solidFileName);
     } else {
@@ -206,7 +206,7 @@ async function runNativeAutoPilot() {
       recordTopicCompletion(item.id, item.topic, lineArtFileName, solidFileName);
       console.log(`✅ Finished Topic #${item.id}: Both images generated & saved in Auto-Download!`);
     } else {
-      console.warn(`⚠️ Topic #${item.id} had partial issues. Will retry on next run.`);
+      console.warn(`⚠️ Topic #${item.id} will be retried on next run.`);
     }
 
     await page.waitForTimeout(2500);
@@ -299,12 +299,14 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
   const targetPath = path.join(destDir, fileName);
 
   try {
-    // Ensure destination directory exists before writing
-    if (!fs.existsSync(destDir)) {
-      fs.mkdirSync(destDir, { recursive: true });
-    }
+    if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
 
-    // 1. Focus Slate Editor & Clear
+    // 1. Snapshot all existing image src URLs BEFORE submitting new prompt
+    const existingSrcs = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll('img')).map(img => img.src).filter(Boolean);
+    });
+
+    // 2. Focus & Clear Slate Editor
     const editor = await page.$('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]');
     if (!editor) {
       console.log('❌ Could not find prompt editor');
@@ -314,67 +316,102 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     await editor.click();
     await page.waitForTimeout(200);
 
+    // Clean editor via DOM and keyboard
+    await page.evaluate(() => {
+      const el = document.querySelector('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]');
+      if (el) {
+        el.focus();
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        document.execCommand('delete', false, null);
+      }
+    });
     await page.keyboard.press('Control+A');
     await page.keyboard.press('Backspace');
     await page.waitForTimeout(200);
 
-    // Type prompt
+    // Type new prompt
     await page.keyboard.insertText(promptText);
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(300);
 
-    // Baseline image count
-    const baselineImageCount = await page.evaluate(() => document.querySelectorAll('img, canvas, div[class*="node"], div[class*="card"]').length);
+    // 3. Submit Prompt (Click Submit Arrow & Press Enter)
+    console.log(`   🚀 Submitting ${styleType} prompt to Google Flow...`);
+    
+    // Click submit button
+    await page.evaluate(() => {
+      const ed = document.querySelector('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]');
+      if (!ed) return;
+      const pRect = ed.getBoundingClientRect();
+      const buttons = Array.from(document.querySelectorAll('button, [role="button"], div[class*="button"], svg'));
+      const submitBtn = buttons.find(b => {
+        const r = b.getBoundingClientRect();
+        const isNear = (r.bottom >= pRect.top && r.bottom <= pRect.bottom + 100 && r.right >= pRect.right - 140);
+        const notSpecial = !b.textContent?.toLowerCase().includes('agent') && !b.textContent?.toLowerCase().includes('banana');
+        return isNear && notSpecial && r.width > 0;
+      });
+      if (submitBtn) {
+        submitBtn.removeAttribute('disabled');
+        submitBtn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+        submitBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        submitBtn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
+        submitBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+        submitBtn.click();
+      }
+    });
 
-    // Submit prompt
-    console.log(`   🚀 Submitting ${styleType} prompt...`);
     await page.keyboard.press('Enter');
+    await page.waitForTimeout(1000);
 
-    try {
-      const arrow = await page.$('button[aria-label*="Generate" i], button[aria-label*="Send" i], button:has(svg):not(:has-text("Agent")):not(:has-text("Banana"))');
-      if (arrow) await arrow.click({ force: true }).catch(() => {});
-    } catch (e) {}
-
-    // 2. Wait for image generation to complete
-    console.log(`   ⏳ Actively monitoring canvas for ${styleType} generation...`);
-    let generationComplete = false;
-    const maxWaitTimeMs = 60000;
+    // 4. Actively Monitor for the NEW UNIQUE Image to appear and finish rendering
+    console.log(`   ⏳ Monitoring canvas for NEW ${styleType} image (waiting for fresh render)...`);
+    let newImageSrc = null;
     const startTime = Date.now();
+    const maxWaitMs = 65000;
 
-    while (Date.now() - startTime < maxWaitTimeMs) {
+    while (Date.now() - startTime < maxWaitMs) {
       await page.waitForTimeout(1500);
 
-      const status = await page.evaluate((initialCount) => {
-        const isSpinnerVisible = !!document.querySelector('div[class*="loading"], div[class*="spinner"], div[class*="progress"], svg[class*="spin"]');
-        const currentCount = document.querySelectorAll('img, canvas, div[class*="node"], div[class*="card"]').length;
-        const hasNewNode = currentCount > initialCount;
-        return { isSpinnerVisible, hasNewNode };
-      }, baselineImageCount);
+      // Auto-remove notification toasts
+      await page.evaluate(() => {
+        document.querySelectorAll('section[aria-label*="Notifications" i], div[class*="toast"], div[class*="hemBBc"]').forEach(el => el.remove());
+      }).catch(() => {});
 
-      if (Date.now() - startTime > 15000 && !status.isSpinnerVisible) {
-        generationComplete = true;
+      const check = await page.evaluate((prevSrcs) => {
+        const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
+          const s = img.src || '';
+          const isReal = s.includes('googleusercontent.com') || s.startsWith('blob:') || s.startsWith('data:') || s.includes('labs.google');
+          const isSpinner = !!img.closest('[class*="loading"], [class*="spinner"]') || (img.naturalWidth > 0 && img.naturalWidth < 100);
+          return isReal && !isSpinner;
+        });
+
+        // Find the newest image that was NOT present before
+        const fresh = imgs.find(img => !prevSrcs.includes(img.src));
+        if (fresh && fresh.complete && (fresh.naturalWidth >= 200 || fresh.src.startsWith('blob:'))) {
+          return { found: true, src: fresh.src, width: fresh.naturalWidth, height: fresh.naturalHeight };
+        }
+
+        // Check if any spinner is active
+        const isSpinning = !!document.querySelector('div[class*="loading"], div[class*="spinner"], div[class*="progress"], svg[class*="spin"]');
+        return { found: false, isSpinning, count: imgs.length };
+      }, existingSrcs);
+
+      if (check.found && Date.now() - startTime > 12000) {
+        newImageSrc = check.src;
+        console.log(`   ✨ NEW ${styleType} image rendered (${check.width}x${check.height})!`);
         break;
       }
     }
 
-    if (!generationComplete) {
-      console.log('   ⚠️ Proceeding to download...');
-      await page.waitForTimeout(4000);
-    } else {
-      console.log(`   ✨ ${styleType} image rendered on canvas!`);
-    }
-
-    // 3. Trigger Download: Save image immediately
+    // 5. Trigger 2x Upscale & Download
     console.log(`   💾 Downloading & saving ${styleType} image...`);
     
-    // Auto-remove notification toasts
-    await page.evaluate(() => {
-      document.querySelectorAll('section[aria-label*="Notifications" i], div[class*="toast"], div[class*="hemBBc"]').forEach(el => el.remove());
-    }).catch(() => {});
+    // Set up download event listener
+    const downloadPromise = page.waitForEvent('download', { timeout: 6000 }).catch(() => null);
 
-    // Set up download event listener with 5s timeout
-    const downloadPromise = page.waitForEvent('download', { timeout: 5000 }).catch(() => null);
-
-    // Fast UI Menu Click Attempt
+    // Try UI 2x / Download buttons
     try {
       const cards = await page.$$('div[class*="node"], div[class*="card"], img, canvas');
       if (cards.length > 0) {
@@ -399,31 +436,30 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       }
     } catch (e) {}
 
-    // Check if download event fired
     const download = await downloadPromise;
     if (download) {
       try {
         await download.saveAs(targetPath);
-        if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 1024) {
-          console.log(`   ✅ Saved: ${targetPath} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
+        if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
+          console.log(`   ✅ Saved via Download Event: ${targetPath} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
           return true;
         }
       } catch (e) {}
     }
 
-    // Direct Extraction Fallback (Instant & 100% Reliable from Canvas Memory)
-    console.log(`   🔄 Extracting High-Res Image Buffer directly from Canvas...`);
+    // 6. Direct Extraction of the SPECIFIC NEW IMAGE from browser memory
+    console.log(`   🔄 Extracting High-Res Image Buffer from Canvas...`);
     try {
-      const base64Data = await page.evaluate(async () => {
+      const base64Data = await page.evaluate(async (targetSrc) => {
         const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
           const src = img.src || '';
           return src.includes('googleusercontent.com') || src.startsWith('blob:') || src.startsWith('data:') || src.includes('labs.google');
         });
 
-        if (imgs.length > 0) {
-          const lastImg = imgs[imgs.length - 1];
+        const targetImg = (targetSrc ? imgs.find(i => i.src === targetSrc) : null) || imgs[imgs.length - 1];
+        if (targetImg) {
           try {
-            const res = await fetch(lastImg.src);
+            const res = await fetch(targetImg.src);
             const blob = await res.blob();
             return new Promise((resolve) => {
               const reader = new FileReader();
@@ -432,21 +468,21 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
             });
           } catch (e) {
             const canvas = document.createElement('canvas');
-            canvas.width = lastImg.naturalWidth || 2048;
-            canvas.height = lastImg.naturalHeight || 2048;
+            canvas.width = targetImg.naturalWidth || 2048;
+            canvas.height = targetImg.naturalHeight || 2048;
             const ctx = canvas.getContext('2d');
-            ctx.drawImage(lastImg, 0, 0);
+            ctx.drawImage(targetImg, 0, 0);
             return canvas.toDataURL('image/jpeg', 0.98);
           }
         }
         return null;
-      });
+      }, newImageSrc);
 
       if (base64Data && base64Data.includes('base64,')) {
         const dataBuffer = Buffer.from(base64Data.split('base64,')[1], 'base64');
-        if (dataBuffer.length > 1024) {
+        if (dataBuffer.length > 10240) {
           fs.writeFileSync(targetPath, dataBuffer);
-          console.log(`   ✅ Directly Extracted & Saved: ${targetPath} (${Math.round(dataBuffer.length / 1024)} KB)`);
+          console.log(`   ✅ Saved High-Res Image: ${targetPath} (${Math.round(dataBuffer.length / 1024)} KB)`);
           return true;
         }
       }
@@ -454,12 +490,13 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       console.warn(`   ⚠️ Extraction notice: ${extractErr.message}`);
     }
 
-    // Final verification on disk
-    if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 1024) {
+    // Final check
+    if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
       console.log(`   ✅ Saved & Verified: ${targetPath}`);
       return true;
     }
 
+    console.warn(`   ⚠️ File verification failed for ${fileName}`);
     return false;
   } catch (err) {
     console.error(`   ❌ Error processing ${styleType}:`, err.message);
