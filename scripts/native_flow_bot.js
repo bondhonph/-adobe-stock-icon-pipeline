@@ -494,8 +494,8 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       }
     }
 
-    // 5. Enter Edit Mode by clicking directly on the newest generated image card
-    console.log(`   🖱️ Clicking newest image on canvas to enter Edit Mode...`);
+    // 5. Enter Edit Mode by targeting the EXACT newly generated image card
+    console.log(`   🖱️ Targeting & clicking the newly rendered ${styleType} card to enter Edit Mode...`);
 
     let inEditMode = false;
     for (let attempt = 1; attempt <= 4; attempt++) {
@@ -504,36 +504,46 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
         break;
       }
 
-      // Find all image elements on canvas and target the newest one
-      const imgHandles = await page.$$('img');
-      const realImgs = [];
-      for (const h of imgHandles) {
-        const box = await h.boundingBox();
-        if (box && box.width > 80 && box.height > 80) {
-          realImgs.push(h);
+      // Method A: Target the EXACT <img> element matching newImageSrc
+      const exactImgHandle = await page.evaluateHandle((targetSrc) => {
+        const imgs = Array.from(document.querySelectorAll('img'));
+        if (targetSrc) {
+          const matched = imgs.find(img => (img.currentSrc || img.src) === targetSrc);
+          if (matched) return matched;
         }
-      }
+        // Fallback: newest visible canvas image
+        const canvasImgs = imgs.filter(img => {
+          const s = img.currentSrc || img.src || '';
+          return (s.includes('googleusercontent.com') || s.startsWith('blob:') || s.startsWith('data:')) && img.naturalWidth > 100;
+        });
+        return canvasImgs[canvasImgs.length - 1] || null;
+      }, newImageSrc);
 
-      const targetImgHandle = realImgs.length > 0 ? realImgs[realImgs.length - 1] : null;
+      if (exactImgHandle && exactImgHandle.asElement()) {
+        const box = await exactImgHandle.asElement().boundingBox();
+        if (box && box.width > 50 && box.height > 50) {
+          const clickX = box.x + box.width / 2;
+          const clickY = box.y + box.height / 2;
+          console.log(`   📍 Clicking exact ${styleType} card at (${Math.round(clickX)}, ${Math.round(clickY)})...`);
 
-      if (targetImgHandle) {
-        const box = await targetImgHandle.boundingBox();
-        if (box) {
-          console.log(`   📍 Clicking image at center (${Math.round(box.x + box.width / 2)}, ${Math.round(box.y + box.height / 2)})...`);
-          // Physical mouse click on center of the image card
-          await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+          // Scroll card into view if needed
+          await exactImgHandle.asElement().scrollIntoViewIfNeeded().catch(() => {});
           await page.waitForTimeout(200);
-          await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-          await page.waitForTimeout(2500);
+
+          // Physical click on the card
+          await page.mouse.move(clickX, clickY);
+          await page.waitForTimeout(150);
+          await page.mouse.click(clickX, clickY);
+          await page.waitForTimeout(2000);
 
           if (page.url().includes('/edit/')) {
             inEditMode = true;
             break;
           }
 
-          // Try double-clicking the image card
-          console.log(`   📍 Double-clicking image...`);
-          await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+          // Double click on the card
+          console.log(`   📍 Double-clicking exact card...`);
+          await page.mouse.dblclick(clickX, clickY);
           await page.waitForTimeout(2500);
 
           if (page.url().includes('/edit/')) {
@@ -543,23 +553,24 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
         }
       }
 
-      // Check edit links fallback
-      const editLinks = await page.$$('a[href*="/edit/"]');
-      if (editLinks.length > 0) {
-        const lastEditLink = editLinks[editLinks.length - 1];
-        const href = await lastEditLink.getAttribute('href');
-        if (href) {
-          console.log(`   🔗 Navigating directly to card edit URL: ${href}`);
-          await page.goto(href, { waitUntil: 'domcontentloaded' }).catch(() => {});
-          await page.waitForTimeout(2500);
-          if (page.url().includes('/edit/')) {
-            inEditMode = true;
-            break;
-          }
+      // Method B: Find NEW edit URL that appeared after submitting this prompt
+      const newEditLink = await page.evaluate((prevLinks) => {
+        const allEditLinks = Array.from(document.querySelectorAll('a[href*="/edit/"]')).map(a => a.href).filter(Boolean);
+        const fresh = allEditLinks.filter(l => !prevLinks.includes(l));
+        return fresh.length > 0 ? fresh[fresh.length - 1] : null;
+      }, initialEditLinks);
+
+      if (newEditLink) {
+        console.log(`   🔗 Navigating directly to new card edit URL: ${newEditLink}`);
+        await page.goto(newEditLink, { waitUntil: 'domcontentloaded' }).catch(() => {});
+        await page.waitForTimeout(2500);
+        if (page.url().includes('/edit/')) {
+          inEditMode = true;
+          break;
         }
       }
 
-      await page.waitForTimeout(1500);
+      await page.waitForTimeout(1000);
     }
 
     // ============================================================================
