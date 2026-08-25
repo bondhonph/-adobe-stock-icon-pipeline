@@ -1,6 +1,7 @@
 const { chromium } = require('playwright');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 // ==============================================================================
 // CONFIGURATION & PATHS (All images saved into single "Auto-Download" folder)
@@ -9,6 +10,7 @@ const WORKSPACE_DIR = path.resolve(__dirname, '..', '..');
 const APP_DIR = path.resolve(__dirname, '..');
 const BOT_PROFILE_DIR = path.join(WORKSPACE_DIR, '.flow_bot_chrome_profile');
 const AUTO_DOWNLOAD_DIR = path.join(WORKSPACE_DIR, 'Auto-Download');
+const USER_DOWNLOADS_DIR = path.join(os.homedir(), 'Downloads');
 const PROGRESS_FILE = path.join(APP_DIR, 'data', 'pipeline_progress.json');
 const TOPICS_FILE = path.join(APP_DIR, 'public', 'topics.json');
 
@@ -555,120 +557,120 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
 
     await page.waitForTimeout(2000);
 
-    // 6. Set up download listener BEFORE triggering upscale/download (up to 5 minutes dynamic wait)
+    // 6. Set up download listener BEFORE triggering upscale/download
     let downloadEventPromise = page.waitForEvent('download', { timeout: 300000 }).catch(() => null);
 
     // 7. Click Download (↓) icon in the top-right toolbar
     console.log(`   🔍 Finding & clicking Download (↓) icon in top toolbar...`);
     let dropdownOpened = false;
 
-    // Find the Download button coordinates in header
-    const dlCoords = await page.evaluate(() => {
-      const allBtns = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"]'));
-      
-      // 1. Check aria-label
-      const byAria = allBtns.find(b => {
-        const a = b.getAttribute('aria-label')?.toLowerCase() || '';
-        return (a.includes('download') || a.includes('save')) && b.offsetParent !== null;
+    for (let tryDl = 1; tryDl <= 3; tryDl++) {
+      dropdownOpened = await page.evaluate(() => {
+        const allBtns = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"]'));
+        
+        // Find buttons in the top header bar (y < 80, x > 50% screen width)
+        const headerBtns = allBtns.filter(b => {
+          const r = b.getBoundingClientRect();
+          return r.top < 80 && r.height > 15 && r.height < 60 && r.left > window.innerWidth * 0.5;
+        }).sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+
+        // Download button is the icon button with download SVG or 2nd small icon
+        const iconBtns = headerBtns.filter(b => b.getBoundingClientRect().width < 50);
+
+        // Check each for download aria-label or SVG
+        for (const btn of iconBtns) {
+          const aria = btn.getAttribute('aria-label')?.toLowerCase() || '';
+          if (aria.includes('download') || aria.includes('save')) {
+            btn.click();
+            return true;
+          }
+        }
+
+        // Positional: in [Heart, Download, Trash, Share], Download is index 1
+        if (iconBtns.length >= 2) {
+          iconBtns[1].click();
+          return true;
+        } else if (iconBtns.length === 1) {
+          iconBtns[0].click();
+          return true;
+        }
+
+        return false;
       });
-      if (byAria) {
-        const r = byAria.getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-      }
 
-      // 2. Search header icons (y < 80, x > 50% width)
-      const headerBtns = allBtns.filter(b => {
-        const r = b.getBoundingClientRect();
-        return r.top < 80 && r.height > 15 && r.height < 60 && r.left > window.innerWidth * 0.5;
-      }).sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+      if (dropdownOpened) {
+        await page.waitForTimeout(1000);
+        // Verify dropdown is open by checking for "Original size" or "1K" or "2K"
+        const isDropdownVisible = await page.evaluate(() => {
+          const allText = document.body?.innerText || '';
+          return allText.includes('Original size') || allText.includes('Upscaled');
+        });
 
-      // Look for button containing SVG
-      for (const btn of headerBtns) {
-        const svg = btn.querySelector('svg');
-        if (svg) {
-          const r = btn.getBoundingClientRect();
-          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        if (isDropdownVisible) {
+          console.log(`   ✅ Download dropdown menu opened!`);
+          break;
         }
       }
-
-      // 3. Positional fallback relative to Done button
-      const doneBtn = allBtns.find(b => b.textContent?.trim() === 'Done');
-      if (doneBtn) {
-        const dr = doneBtn.getBoundingClientRect();
-        return { x: dr.left - 220, y: dr.top + dr.height / 2 };
-      }
-
-      return null;
-    });
-
-    if (dlCoords) {
-      console.log(`   📍 Clicking Download icon at (${Math.round(dlCoords.x)}, ${Math.round(dlCoords.y)})...`);
-      await page.mouse.click(dlCoords.x, dlCoords.y);
-      dropdownOpened = true;
-      await page.waitForTimeout(1500);
+      await page.waitForTimeout(1000);
     }
 
     // 8. In the dropdown popup: Click "2K" / "Upscaled"
     console.log(`   📐 Selecting "2K" Upscaled option from dropdown...`);
 
-    const option2KCoords = await page.evaluate(() => {
-      const allEls = Array.from(document.querySelectorAll('div, span, button, label, li, a, p'));
+    let option2KClicked = false;
+    for (let try2k = 1; try2k <= 3; try2k++) {
+      option2KClicked = await page.evaluate(() => {
+        const allEls = Array.from(document.querySelectorAll('div, span, button, label, li, p, a'));
 
-      // Find element containing "2K" but not "4K" or "1K"
-      const opt2K = allEls.find(el => {
-        const text = el.textContent?.trim() || '';
-        const is2K = (text.includes('2K') || text.includes('2k') || text.includes('2x') || text.includes('2X')) &&
-                     !text.includes('4K') && !text.includes('1K') && !text.includes('Upgrade');
-        return is2K && el.offsetParent !== null;
+        // Target element containing "2K" but not "4K" and not "1K" and not "Upgrade"
+        const opt2K = allEls.find(el => {
+          const text = el.textContent?.trim() || '';
+          const has2K = text.includes('2K') || text.includes('2k') || text.includes('2x') || text.includes('2X');
+          const notOther = !text.includes('4K') && !text.includes('1K') && !text.includes('Upgrade');
+          return has2K && notOther && el.offsetParent !== null;
+        });
+
+        if (opt2K) {
+          const btnInside = opt2K.querySelector('button') || opt2K;
+          btnInside.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+          btnInside.click();
+          return true;
+        }
+
+        // Fallback: search for element containing "Upscale"
+        const upscaleBtn = allEls.find(el => {
+          const t = el.textContent?.trim().toLowerCase() || '';
+          return (t === 'upscale' || t === 'upscaled' || t.includes('upscale')) && !t.includes('upgrade') && el.offsetParent !== null;
+        });
+        if (upscaleBtn) {
+          upscaleBtn.click();
+          return true;
+        }
+
+        return false;
       });
 
-      if (opt2K) {
-        const r = opt2K.getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      if (option2KClicked) {
+        console.log(`   ⏳ "2K" option clicked! Upscaling started...`);
+        break;
       }
-
-      // Fallback: look for "Upscale" button
-      const upscaleBtn = allEls.find(el => {
-        const t = el.textContent?.trim().toLowerCase() || '';
-        return (t === 'upscale' || t === 'upscaled' || t.includes('upscale')) && !t.includes('upgrade') && el.offsetParent !== null;
-      });
-
-      if (upscaleBtn) {
-        const r = upscaleBtn.getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-      }
-
-      return null;
-    });
-
-    if (option2KCoords) {
-      console.log(`   📍 Clicking 2K option at (${Math.round(option2KCoords.x)}, ${Math.round(option2KCoords.y)})...`);
-      await page.mouse.click(option2KCoords.x, option2KCoords.y);
-      console.log(`   ⏳ "2K" clicked! Starting dynamic wait for upscale completion...`);
-    } else {
-      console.log(`   ⚠️ 2K option coordinates not found, dispatching DOM click...`);
-      await page.evaluate(() => {
-        const allEls = Array.from(document.querySelectorAll('div, span, button, label, li, a'));
-        const opt = allEls.find(el => (el.textContent?.includes('2K') || el.textContent?.includes('2k')) && !el.textContent?.includes('4K') && !el.textContent?.includes('1K'));
-        if (opt) opt.click();
-      });
+      await page.waitForTimeout(1000);
     }
 
-    // 9. DYNAMIC WAIT: Wait as long as upscaling takes (no fixed timeout)
-    console.log(`   ⏳ 2K Upscaling in progress — waiting dynamically until 100% complete...`);
+    // 9. DYNAMIC WAIT: Wait as long as upscaling takes and capture downloaded file
+    console.log(`   ⏳ 2K Upscaling in progress — watching for completed download...`);
 
     let downloadSuccess = false;
     const upscaleStartTime = Date.now();
-    let isProcessing = true;
+    const searchDirs = [AUTO_DOWNLOAD_DIR, USER_DOWNLOADS_DIR];
 
-    // Race between download event and active progress polling
-    while (isProcessing) {
+    while (Date.now() - upscaleStartTime < 300000) { // up to 5 mins
       const elapsedSec = Math.round((Date.now() - upscaleStartTime) / 1000);
 
-      // Check if download resolved
+      // A. Check Playwright download event
       const download = await Promise.race([
         downloadEventPromise,
-        new Promise(resolve => setTimeout(() => resolve('WAITING'), 2500))
+        new Promise(resolve => setTimeout(() => resolve('WAITING'), 2000))
       ]);
 
       if (download && download !== 'WAITING') {
@@ -676,61 +678,71 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
           await download.saveAs(targetPath);
           if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
             const fileSizeKB = Math.round(fs.statSync(targetPath).size / 1024);
-            console.log(`   🎉 ✅ 2K Upscaled File Successfully Downloaded in ${elapsedSec}s: ${targetPath} (${fileSizeKB} KB)`);
+            console.log(`\n   🎉 ✅ 2K Upscaled File Downloaded in ${elapsedSec}s: ${targetPath} (${fileSizeKB} KB)`);
             downloadSuccess = true;
             break;
           }
-        } catch (e) {
-          console.warn(`   ⚠️ Download save notice: ${e.message}`);
-        }
+        } catch (e) {}
       }
 
-      // Check if file is already on disk
+      // B. Check disk in both Auto-Download and OS Downloads folders
+      for (const dir of searchDirs) {
+        if (!fs.existsSync(dir)) continue;
+        try {
+          const files = fs.readdirSync(dir);
+          const isCrDownloading = files.some(f => f.endsWith('.crdownload'));
+
+          if (!isCrDownloading) {
+            const matchingFiles = files.filter(f => {
+              if (!f.endsWith('.jpeg') && !f.endsWith('.jpg') && !f.endsWith('.png')) return false;
+              const fullPath = path.join(dir, f);
+              try {
+                const stat = fs.statSync(fullPath);
+                // Must be modified recently and larger than 100KB
+                return stat.mtimeMs >= upscaleStartTime - 10000 && stat.size > 102400;
+              } catch (e) { return false; }
+            });
+
+            if (matchingFiles.length > 0) {
+              matchingFiles.sort((a, b) => fs.statSync(path.join(dir, b)).mtimeMs - fs.statSync(path.join(dir, a)).mtimeMs);
+              const newestDownloadedFile = path.join(dir, matchingFiles[0]);
+
+              // Copy to targetPath
+              fs.copyFileSync(newestDownloadedFile, targetPath);
+              if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
+                const sizeKB = Math.round(fs.statSync(targetPath).size / 1024);
+                console.log(`\n   🎉 ✅ 2K File Captured from ${path.basename(dir)} in ${elapsedSec}s: ${targetPath} (${sizeKB} KB)`);
+                downloadSuccess = true;
+                break;
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
+      if (downloadSuccess) break;
+
+      // C. Check if already at targetPath
       if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
-        console.log(`   🎉 ✅ Verified 2K File on disk (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
+        console.log(`\n   🎉 ✅ Verified 2K File on disk (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
         downloadSuccess = true;
         break;
       }
 
-      // Check if Google Flow is actively upscaling/loading
-      const stillUpscaling = await page.evaluate(() => {
-        const isSpinning = !!document.querySelector('div[class*="loading" i], div[class*="spinner" i], div[class*="progress" i], [aria-busy="true"], div[role="progressbar"]');
-        const hasUpscalingText = Array.from(document.querySelectorAll('*')).some(el => {
-          const t = el.textContent?.toLowerCase() || '';
-          return t.includes('upscaling') || t.includes('enhancing');
-        });
-        return isSpinning || hasUpscalingText;
+      // Check on-page upscaling status toast
+      const isUpscaling = await page.evaluate(() => {
+        const text = document.body?.innerText || '';
+        return text.includes('Upscaling your image') || text.includes('download will start');
       });
 
-      if (stillUpscaling) {
-        process.stdout.write(`\r   ⏳ Upscaling in progress... (${elapsedSec}s elapsed)`);
-      } else if (elapsedSec > 15) {
-        // If upscaling spinner stopped after at least 15s, check if we need to click download again
-        const recheckDl = await downloadEventPromise;
-        if (recheckDl && recheckDl !== 'WAITING') {
-          try {
-            await recheckDl.saveAs(targetPath);
-            if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
-              downloadSuccess = true;
-              break;
-            }
-          } catch (e) {}
-        }
-        
-        // If still not downloaded, give it up to 60s of grace
-        if (elapsedSec > 60) {
-          isProcessing = false;
-        }
-      }
-
-      // Safety ceiling of 5 minutes
-      if (elapsedSec > 300) {
-        console.log('\n   ⚠️ Max 5 minutes reached, moving to fallback...');
-        break;
+      if (isUpscaling) {
+        process.stdout.write(`\r   ⏳ Upscaling in progress on Google Flow... (${elapsedSec}s elapsed)`);
+      } else {
+        process.stdout.write(`\r   ⏳ Waiting for 2K download to finish... (${elapsedSec}s elapsed)`);
       }
     }
 
-    console.log(''); // newline after status log
+    console.log(''); // newline
 
     // 10. Fallback: High-Resolution 2K Buffer Extraction if needed
     if (!downloadSuccess && (!fs.existsSync(targetPath) || fs.statSync(targetPath).size <= 10240)) {
