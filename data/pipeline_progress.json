@@ -1,4 +1,13 @@
 {
-  "completedTopicIds": [],
-  "topics": {}
+  "completedTopicIds": [
+    1
+  ],
+  "topics": {
+    "1": {
+      "topic": "Business Strategy & Management",
+      "lineArtFile": "1_Business_Strategy_Management_LineArt.jpeg",
+      "solidFile": "1_Business_Strategy_Management_Solid.jpeg",
+      "completedAt": "2026-08-25T06:40:52.448Z"
+    }
+  }
 }

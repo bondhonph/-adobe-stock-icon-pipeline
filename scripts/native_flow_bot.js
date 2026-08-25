@@ -469,8 +469,53 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     if (download) {
       await download.saveAs(targetPath);
       if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 1024) {
-        console.log(`   ✅ Saved & Verified: ${targetPath} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
+        console.log(`   ✅ Saved & Verified via Download Event: ${targetPath} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
         return true;
+      }
+    }
+
+    // Direct Extraction Fallback: If UI download didn't produce file, extract directly from DOM/Canvas
+    if (!fs.existsSync(targetPath) || fs.statSync(targetPath).size < 1024) {
+      console.log(`   🔄 Extracting High-Res Image Buffer directly from Canvas...`);
+      try {
+        const base64Data = await page.evaluate(async () => {
+          const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
+            const src = img.src || '';
+            return src.includes('googleusercontent.com') || src.startsWith('blob:') || src.startsWith('data:') || src.includes('labs.google');
+          });
+
+          if (imgs.length > 0) {
+            const lastImg = imgs[imgs.length - 1];
+            try {
+              const res = await fetch(lastImg.src);
+              const blob = await res.blob();
+              return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.readAsDataURL(blob);
+              });
+            } catch (e) {
+              const canvas = document.createElement('canvas');
+              canvas.width = lastImg.naturalWidth || 2048;
+              canvas.height = lastImg.naturalHeight || 2048;
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(lastImg, 0, 0);
+              return canvas.toDataURL('image/jpeg', 0.98);
+            }
+          }
+          return null;
+        });
+
+        if (base64Data && base64Data.includes('base64,')) {
+          const dataBuffer = Buffer.from(base64Data.split('base64,')[1], 'base64');
+          if (dataBuffer.length > 1024) {
+            fs.writeFileSync(targetPath, dataBuffer);
+            console.log(`   ✅ Directly Extracted & Saved: ${targetPath} (${Math.round(dataBuffer.length / 1024)} KB)`);
+            return true;
+          }
+        }
+      } catch (extractErr) {
+        console.warn(`   ⚠️ Extraction notice: ${extractErr.message}`);
       }
     }
 
