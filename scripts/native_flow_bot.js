@@ -471,166 +471,167 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       }
     }
 
-    // 5. Enter Edit Mode by clicking the newly generated image card
+    // 5. Enter Edit Mode by physically clicking the newly generated image card
     console.log(`   🖱️ Entering Edit Mode for 2K Upscaled download...`);
 
-    let enteredEdit = false;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    let inEditMode = false;
+    for (let attempt = 1; attempt <= 4; attempt++) {
       if (page.url().includes('/edit/')) {
-        enteredEdit = true;
+        inEditMode = true;
         break;
       }
 
-      // Try clicking the card / node or newest image
-      await page.evaluate(() => {
-        const nodes = Array.from(document.querySelectorAll('div[class*="react-flow__node"], div[class*="nodeWrapper"], div[class*="card"], div[class*="node"]'));
+      // Find the newest node / card or image on canvas
+      const targetCard = await page.evaluateHandle(() => {
+        const nodes = Array.from(document.querySelectorAll('div[class*="react-flow__node"], div[class*="nodeWrapper"], div[class*="card"], div.react-flow__node'));
+        if (nodes.length > 0) return nodes[nodes.length - 1];
         const imgs = Array.from(document.querySelectorAll('img')).filter(i => {
           const s = i.src || '';
           return s.includes('googleusercontent.com') || s.startsWith('blob:');
         });
+        return imgs[imgs.length - 1] || null;
+      });
 
-        const target = nodes[nodes.length - 1] || imgs[imgs.length - 1];
-        if (target) {
-          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      if (targetCard && targetCard.asElement()) {
+        const box = await targetCard.asElement().boundingBox();
+        if (box) {
+          console.log(`   📍 Clicking card at (${Math.round(box.x + box.width / 2)}, ${Math.round(box.y + box.height / 2)})...`);
+          // Real hardware mouse click at center of card
+          await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+          await page.waitForTimeout(2000);
+
+          if (page.url().includes('/edit/')) {
+            inEditMode = true;
+            break;
+          }
+
+          // Try double-click
+          console.log(`   📍 Double-clicking card...`);
+          await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+          await page.waitForTimeout(2500);
+
+          if (page.url().includes('/edit/')) {
+            inEditMode = true;
+            break;
+          }
         }
-      });
-
-      await page.waitForTimeout(2000);
-
-      // Check if Edit Mode opened (URL contains /edit/ or Done button is present)
-      enteredEdit = await page.evaluate(() => {
-        return window.location.href.includes('/edit/') || !!document.querySelector('button:has-text("Done")') || Array.from(document.querySelectorAll('button')).some(b => b.textContent?.trim() === 'Done');
-      });
-
-      if (enteredEdit) break;
-
-      // Double-click fallback
-      const imgHandles = await page.$$('img');
-      if (imgHandles.length > 0) {
-        await imgHandles[imgHandles.length - 1].dblclick({ force: true }).catch(() => {});
-        await page.waitForTimeout(2500);
       }
+
+      await page.waitForTimeout(1500);
     }
 
-    // Wait for Edit Mode UI to settle
+    // Verify Edit Mode
+    if (page.url().includes('/edit/')) {
+      console.log(`   🎨 Successfully entered Edit Mode: ${page.url()}`);
+    } else {
+      console.log(`   ⚠️ Checking for Edit Mode UI elements...`);
+    }
+
     await page.waitForTimeout(2000);
-    console.log(`   🎨 In Edit Mode: ${page.url()}`);
 
-    // 6. Set up download listener (up to 45s for 2K upscale generation + download)
-    const downloadPromise = page.waitForEvent('download', { timeout: 45000 }).catch(() => null);
+    // 6. Set up download listener BEFORE triggering upscale/download (60s timeout for 2K generation)
+    const downloadPromise = page.waitForEvent('download', { timeout: 60000 }).catch(() => null);
 
-    // 7. Click Download (↓) icon in the top-right header toolbar
+    // 7. Click Download (↓) icon in the top-right toolbar
     console.log(`   🔍 Finding & clicking Download (↓) icon in top toolbar...`);
     let dropdownOpened = false;
 
-    for (let tryDl = 0; tryDl < 3; tryDl++) {
-      dropdownOpened = await page.evaluate(() => {
-        const allBtns = Array.from(document.querySelectorAll('button, [role="button"]'));
-        
-        // Strategy 1: Find button with aria-label containing download or save
-        const dlByAria = allBtns.find(b => {
-          const aria = b.getAttribute('aria-label')?.toLowerCase() || '';
-          return (aria.includes('download') || aria.includes('save')) && b.offsetParent !== null;
-        });
-        if (dlByAria) {
-          dlByAria.click();
-          return true;
-        }
-
-        // Strategy 2: Find button with download SVG icon in top header (y < 100)
-        const headerBtns = allBtns.filter(b => {
-          const r = b.getBoundingClientRect();
-          return r.top < 100 && r.height > 15 && r.height < 60 && r.left > window.innerWidth * 0.5;
-        }).sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-
-        for (const btn of headerBtns) {
-          const svg = btn.querySelector('svg');
-          if (svg) {
-            const pathData = Array.from(svg.querySelectorAll('path')).map(p => p.getAttribute('d') || '').join(' ');
-            // Common download icon path features (down arrow into tray)
-            if (pathData.includes('M19') || pathData.includes('v-2') || pathData.includes('19 9') || pathData.includes('12 16') || pathData.includes('12 17')) {
-              btn.click();
-              return true;
-            }
-          }
-        }
-
-        // Strategy 3: Positional relative to Done button or icon sequence
-        // In top right: [Heart] [Download] [Trash] [Share] [Hide history] [Done]
-        // Download is usually the 2nd icon button from the left of that group
-        const smallIconBtns = headerBtns.filter(b => {
-          const r = b.getBoundingClientRect();
-          return r.width < 50; // exclude text buttons like Done, Hide history
-        });
-
-        if (smallIconBtns.length >= 2) {
-          // Click the 2nd icon (Download)
-          smallIconBtns[1].click();
-          return true;
-        } else if (smallIconBtns.length === 1) {
-          smallIconBtns[0].click();
-          return true;
-        }
-
-        return false;
+    // Find the Download button coordinates in header
+    const dlCoords = await page.evaluate(() => {
+      const allBtns = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"]'));
+      
+      // 1. Check aria-label
+      const byAria = allBtns.find(b => {
+        const a = b.getAttribute('aria-label')?.toLowerCase() || '';
+        return (a.includes('download') || a.includes('save')) && b.offsetParent !== null;
       });
-
-      if (dropdownOpened) {
-        console.log(`   ✅ Clicked Download (↓) icon!`);
-        break;
+      if (byAria) {
+        const r = byAria.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       }
-      await page.waitForTimeout(1000);
-    }
 
-    // Wait for the resolution dropdown to be visible
-    await page.waitForTimeout(1200);
+      // 2. Search header icons (y < 80, x > 50% width)
+      const headerBtns = allBtns.filter(b => {
+        const r = b.getBoundingClientRect();
+        return r.top < 80 && r.height > 15 && r.height < 60 && r.left > window.innerWidth * 0.5;
+      }).sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+
+      // Look for button containing SVG
+      for (const btn of headerBtns) {
+        const svg = btn.querySelector('svg');
+        if (svg) {
+          const r = btn.getBoundingClientRect();
+          // The download button is typically the 2nd small icon in the top right cluster
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }
+      }
+
+      // 3. Positional fallback relative to Done button or top right
+      const doneBtn = allBtns.find(b => b.textContent?.trim() === 'Done');
+      if (doneBtn) {
+        const dr = doneBtn.getBoundingClientRect();
+        // Download icon is about 220px to the left of Done button
+        return { x: dr.left - 220, y: dr.top + dr.height / 2 };
+      }
+
+      return null;
+    });
+
+    if (dlCoords) {
+      console.log(`   📍 Clicking Download icon at (${Math.round(dlCoords.x)}, ${Math.round(dlCoords.y)})...`);
+      await page.mouse.click(dlCoords.x, dlCoords.y);
+      dropdownOpened = true;
+      await page.waitForTimeout(1500);
+    }
 
     // 8. In the dropdown popup: Click "2K" / "Upscaled"
     console.log(`   📐 Selecting "2K" Upscaled option from dropdown...`);
 
-    const option2KClicked = await page.evaluate(() => {
+    const option2KCoords = await page.evaluate(() => {
       const allEls = Array.from(document.querySelectorAll('div, span, button, label, li, a, p'));
 
-      // Look for element that has "2K" text in the resolution popup
-      // Popup contains: "1K Original size", "2K Upscaled" / "2K Upscale", "4K Upscaled Upgrade"
+      // Find element containing "2K" but not "4K" or "1K"
       const opt2K = allEls.find(el => {
         const text = el.textContent?.trim() || '';
-        // Match 2K row (must have 2K or 2k, but NOT 4K and NOT 1K)
         const is2K = (text.includes('2K') || text.includes('2k') || text.includes('2x') || text.includes('2X')) &&
                      !text.includes('4K') && !text.includes('1K') && !text.includes('Upgrade');
         return is2K && el.offsetParent !== null;
       });
 
       if (opt2K) {
-        // Try clicking the row or any button inside it
-        const btnInside = opt2K.querySelector('button') || opt2K;
-        btnInside.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-        return true;
+        const r = opt2K.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       }
 
-      // Fallback: look for "Upscale" button directly inside dropdown
+      // Fallback: look for "Upscale" button
       const upscaleBtn = allEls.find(el => {
         const t = el.textContent?.trim().toLowerCase() || '';
         return (t === 'upscale' || t === 'upscaled' || t.includes('upscale')) && !t.includes('upgrade') && el.offsetParent !== null;
       });
+
       if (upscaleBtn) {
-        upscaleBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-        return true;
+        const r = upscaleBtn.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
       }
 
-      return false;
+      return null;
     });
 
-    if (option2KClicked) {
+    if (option2KCoords) {
+      console.log(`   📍 Clicking 2K option at (${Math.round(option2KCoords.x)}, ${Math.round(option2KCoords.y)})...`);
+      await page.mouse.click(option2KCoords.x, option2KCoords.y);
       console.log(`   ⏳ "2K" selected! Waiting for 2K Upscaling & Download generation...`);
     } else {
-      console.log(`   ⚠️ 2K option element not found directly, waiting for download event...`);
+      console.log(`   ⚠️ 2K option coordinates not found, dispatching DOM click...`);
+      await page.evaluate(() => {
+        const allEls = Array.from(document.querySelectorAll('div, span, button, label, li, a'));
+        const opt = allEls.find(el => (el.textContent?.includes('2K') || el.textContent?.includes('2k')) && !el.textContent?.includes('4K') && !el.textContent?.includes('1K'));
+        if (opt) opt.click();
+      });
     }
 
     // 9. Wait for the 2K Upscale processing + Browser Download
-    // Upscaling takes some time (5-20s), then browser downloads the 2K file
-    console.log(`   ⏳ Waiting for 2K upscale processing to complete and download to finish...`);
+    console.log(`   ⏳ Upscaling in progress (waiting up to 60s for full 2K file download)...`);
 
     let downloadSuccess = false;
     const download = await downloadPromise;
@@ -648,93 +649,77 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       }
     }
 
-    // If download didn't trigger automatically after upscale, re-check dropdown or click 2K again
+    // If download didn't trigger automatically, wait additional 8s and check disk or re-click
     if (!downloadSuccess) {
-      console.log(`   🔄 Checking if 2K download needs confirmation click...`);
-      await page.waitForTimeout(5000);
+      console.log(`   🔄 Checking if 2K download finished or needs re-click...`);
+      await page.waitForTimeout(8000);
 
-      // Re-click 2K if ready
-      await page.evaluate(() => {
-        const allEls = Array.from(document.querySelectorAll('div, span, button, label, li, a'));
-        const opt2K = allEls.find(el => {
-          const text = el.textContent?.trim() || '';
-          return (text.includes('2K') || text.includes('2k')) && !text.includes('4K') && !text.includes('1K') && el.offsetParent !== null;
-        });
-        if (opt2K) opt2K.click();
-      });
-
-      await page.waitForTimeout(3000);
-
-      // Check if file was written to disk by Chrome default download
       if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
         downloadSuccess = true;
-      }
-    }
+      } else {
+        // Direct buffer extraction fallback
+        console.log(`   🔄 Running 2K High-Res Buffer Extraction Fallback...`);
+        try {
+          const base64Data = await page.evaluate(async (targetSrc) => {
+            const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
+              const src = img.currentSrc || img.src || '';
+              return src.includes('googleusercontent.com') || src.startsWith('blob:') || src.startsWith('data:') || src.includes('labs.google');
+            });
 
-    // 10. Fallback: High-Resolution 2K (2048x2048) extraction if needed
-    if (!downloadSuccess) {
-      console.log(`   🔄 Running 2K High-Res Buffer Extraction Fallback...`);
-      try {
-        const base64Data = await page.evaluate(async (targetSrc) => {
-          const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
-            const src = img.currentSrc || img.src || '';
-            return src.includes('googleusercontent.com') || src.startsWith('blob:') || src.startsWith('data:') || src.includes('labs.google');
-          });
+            const bigImg = imgs.reduce((best, img) => {
+              return (!best || (img.naturalWidth || 0) > (best.naturalWidth || 0)) ? img : best;
+            }, null);
 
-          // In edit mode, find largest image
-          const bigImg = imgs.reduce((best, img) => {
-            return (!best || (img.naturalWidth || 0) > (best.naturalWidth || 0)) ? img : best;
-          }, null);
+            const targetImg = bigImg || (targetSrc ? imgs.find(i => (i.currentSrc || i.src) === targetSrc) : null) || imgs[imgs.length - 1];
+            if (targetImg) {
+              let url = targetImg.currentSrc || targetImg.src;
+              if (url.includes('googleusercontent.com')) {
+                url = url.replace(/=s\d+/g, '=s2048').replace(/=w\d+-h\d+/g, '=w2048-h2048');
+                if (!url.includes('=s') && !url.includes('=w')) {
+                  url += (url.includes('?') ? '&' : '?') + '=s2048';
+                }
+              }
 
-          const targetImg = bigImg || (targetSrc ? imgs.find(i => (i.currentSrc || i.src) === targetSrc) : null) || imgs[imgs.length - 1];
-          if (targetImg) {
-            let url = targetImg.currentSrc || targetImg.src;
-            if (url.includes('googleusercontent.com')) {
-              url = url.replace(/=s\d+/g, '=s2048').replace(/=w\d+-h\d+/g, '=w2048-h2048');
-              if (!url.includes('=s') && !url.includes('=w')) {
-                url += (url.includes('?') ? '&' : '?') + '=s2048';
+              try {
+                const res = await fetch(url);
+                const blob = await res.blob();
+                return new Promise((resolve) => {
+                  const reader = new FileReader();
+                  reader.onloadend = () => resolve(reader.result);
+                  reader.readAsDataURL(blob);
+                });
+              } catch (e) {
+                const canvas = document.createElement('canvas');
+                canvas.width = 2048;
+                canvas.height = 2048;
+                const ctx = canvas.getContext('2d');
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.drawImage(targetImg, 0, 0, 2048, 2048);
+                return canvas.toDataURL('image/jpeg', 0.98);
               }
             }
+            return null;
+          }, newImageSrc);
 
-            try {
-              const res = await fetch(url);
-              const blob = await res.blob();
-              return new Promise((resolve) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(reader.result);
-                reader.readAsDataURL(blob);
-              });
-            } catch (e) {
-              const canvas = document.createElement('canvas');
-              canvas.width = 2048;
-              canvas.height = 2048;
-              const ctx = canvas.getContext('2d');
-              ctx.imageSmoothingEnabled = true;
-              ctx.imageSmoothingQuality = 'high';
-              ctx.drawImage(targetImg, 0, 0, 2048, 2048);
-              return canvas.toDataURL('image/jpeg', 0.98);
+          if (base64Data && base64Data.includes('base64,')) {
+            const dataBuffer = Buffer.from(base64Data.split('base64,')[1], 'base64');
+            if (dataBuffer.length > 10240) {
+              fs.writeFileSync(targetPath, dataBuffer);
+              console.log(`   ✅ Saved 2K High-Res Image: ${targetPath} (${Math.round(dataBuffer.length / 1024)} KB)`);
+              downloadSuccess = true;
             }
           }
-          return null;
-        }, newImageSrc);
-
-        if (base64Data && base64Data.includes('base64,')) {
-          const dataBuffer = Buffer.from(base64Data.split('base64,')[1], 'base64');
-          if (dataBuffer.length > 10240) {
-            fs.writeFileSync(targetPath, dataBuffer);
-            console.log(`   ✅ Saved 2K High-Res Image: ${targetPath} (${Math.round(dataBuffer.length / 1024)} KB)`);
-            downloadSuccess = true;
-          }
+        } catch (extractErr) {
+          console.warn(`   ⚠️ Extraction notice: ${extractErr.message}`);
         }
-      } catch (extractErr) {
-        console.warn(`   ⚠️ Extraction notice: ${extractErr.message}`);
       }
     }
 
-    // 11. Click "Done" button to return to Main Canvas Grid
+    // 10. Click "Done" button to return to Main Canvas Grid
     await exitEditMode(page);
 
-    // 12. Final verification on disk
+    // 11. Final verification on disk
     if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
       console.log(`   ✅ Step Complete: ${fileName} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
       return true;
@@ -757,30 +742,27 @@ async function exitEditMode(page) {
 
   console.log(`   ↩️ Clicking "Done" button to return to Main Canvas Grid...`);
   try {
-    // Click "Done" button (top-right corner white button)
-    let doneClicked = await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
-      const doneBtn = btns.find(b => b.textContent?.trim() === 'Done' && b.offsetParent !== null);
-      if (doneBtn) {
-        doneBtn.click();
-        return true;
+    // Locate and click "Done" button physically
+    const doneBtnHandle = await page.$('button:has-text("Done")');
+    if (doneBtnHandle) {
+      const box = await doneBtnHandle.boundingBox();
+      if (box) {
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        await page.waitForTimeout(2500);
       }
-      return false;
-    });
-
-    if (doneClicked) {
-      await page.waitForTimeout(2500);
     }
 
     if (!page.url().includes('/edit/')) return;
 
-    // Click Back arrow (←) at top-left
-    const backBtn = await page.$('button[aria-label*="Back" i], a[aria-label*="Back" i]');
-    if (backBtn) {
-      await backBtn.click({ force: true });
-      await page.waitForTimeout(2000);
-      if (!page.url().includes('/edit/')) return;
-    }
+    // Fallback: evaluate click
+    await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+      const done = btns.find(b => b.textContent?.trim() === 'Done');
+      if (done) done.click();
+    });
+    await page.waitForTimeout(2500);
+
+    if (!page.url().includes('/edit/')) return;
 
     // Direct navigate fallback
     const mainUrl = page.url().split('/edit/')[0];
