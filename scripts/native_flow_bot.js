@@ -560,53 +560,65 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     // 6. Set up download listener BEFORE triggering upscale/download
     let downloadEventPromise = page.waitForEvent('download', { timeout: 300000 }).catch(() => null);
 
-    // 7. Click Download (↓) icon in the top-right toolbar
+    // 7. Locate and physically click the Download (↓) icon in the top-right toolbar
     console.log(`   🔍 Finding & clicking Download (↓) icon in top toolbar...`);
     let dropdownOpened = false;
+    let downloadButtonBox = null;
 
-    for (let tryDl = 1; tryDl <= 3; tryDl++) {
-      dropdownOpened = await page.evaluate(() => {
-        const allBtns = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"]'));
-        
-        // Find buttons in the top header bar (y < 80, x > 50% screen width)
-        const headerBtns = allBtns.filter(b => {
-          const r = b.getBoundingClientRect();
-          return r.top < 80 && r.height > 15 && r.height < 60 && r.left > window.innerWidth * 0.5;
-        }).sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+    for (let tryDl = 1; tryDl <= 4; tryDl++) {
+      const allBtns = await page.$$('button, [role="button"]');
+      let dlHandle = null;
+      let dlBox = null;
 
-        // Download button is the icon button with download SVG or 2nd small icon
-        const iconBtns = headerBtns.filter(b => b.getBoundingClientRect().width < 50);
-
-        // Check each for download aria-label or SVG
-        for (const btn of iconBtns) {
-          const aria = btn.getAttribute('aria-label')?.toLowerCase() || '';
-          if (aria.includes('download') || aria.includes('save')) {
-            btn.click();
-            return true;
+      // 1. Try finding by aria-label
+      for (const btn of allBtns) {
+        const aria = await btn.getAttribute('aria-label');
+        if (aria && (aria.toLowerCase().includes('download') || aria.toLowerCase().includes('save'))) {
+          const b = await btn.boundingBox();
+          if (b && b.y < 80) {
+            dlHandle = btn;
+            dlBox = b;
+            break;
           }
         }
+      }
 
-        // Positional: in [Heart, Download, Trash, Share], Download is index 1
-        if (iconBtns.length >= 2) {
-          iconBtns[1].click();
-          return true;
-        } else if (iconBtns.length === 1) {
-          iconBtns[0].click();
-          return true;
+      // 2. Try positional (icon cluster in top right: Heart, Download, Trash, Share)
+      if (!dlBox) {
+        const topIconBtns = [];
+        for (const btn of allBtns) {
+          const b = await btn.boundingBox();
+          if (b && b.y < 80 && b.width < 50 && b.width > 20 && b.x > 800) {
+            topIconBtns.push({ handle: btn, box: b });
+          }
         }
+        topIconBtns.sort((a, b) => a.box.x - b.box.x);
+        // Download is 2nd icon (index 1)
+        if (topIconBtns.length >= 2) {
+          dlHandle = topIconBtns[1].handle;
+          dlBox = topIconBtns[1].box;
+        } else if (topIconBtns.length === 1) {
+          dlHandle = topIconBtns[0].handle;
+          dlBox = topIconBtns[0].box;
+        }
+      }
 
-        return false;
-      });
+      if (dlBox) {
+        downloadButtonBox = dlBox;
+        console.log(`   📍 Physical click on Download button at (${Math.round(dlBox.x + dlBox.width / 2)}, ${Math.round(dlBox.y + dlBox.height / 2)})...`);
+        await page.mouse.move(dlBox.x + dlBox.width / 2, dlBox.y + dlBox.height / 2);
+        await page.waitForTimeout(150);
+        await page.mouse.click(dlBox.x + dlBox.width / 2, dlBox.y + dlBox.height / 2);
+        if (dlHandle) await dlHandle.click({ force: true }).catch(() => {});
+        await page.waitForTimeout(1500);
 
-      if (dropdownOpened) {
-        await page.waitForTimeout(1000);
-        // Verify dropdown is open by checking for "Original size" or "1K" or "2K"
-        const isDropdownVisible = await page.evaluate(() => {
-          const allText = document.body?.innerText || '';
-          return allText.includes('Original size') || allText.includes('Upscaled');
+        // Verify dropdown is open
+        dropdownOpened = await page.evaluate(() => {
+          const bodyText = document.body?.innerText || '';
+          return bodyText.includes('Original size') || bodyText.includes('Upscaled') || bodyText.includes('1K') || bodyText.includes('2K');
         });
 
-        if (isDropdownVisible) {
+        if (dropdownOpened) {
           console.log(`   ✅ Download dropdown menu opened!`);
           break;
         }
@@ -614,46 +626,43 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       await page.waitForTimeout(1000);
     }
 
-    // 8. In the dropdown popup: Click "2K" / "Upscaled"
+    // 8. In the dropdown popup: Physically click "2K" / "Upscaled"
     console.log(`   📐 Selecting "2K" Upscaled option from dropdown...`);
 
     let option2KClicked = false;
-    for (let try2k = 1; try2k <= 3; try2k++) {
-      option2KClicked = await page.evaluate(() => {
-        const allEls = Array.from(document.querySelectorAll('div, span, button, label, li, p, a'));
-
-        // Target element containing "2K" but not "4K" and not "1K" and not "Upgrade"
-        const opt2K = allEls.find(el => {
-          const text = el.textContent?.trim() || '';
-          const has2K = text.includes('2K') || text.includes('2k') || text.includes('2x') || text.includes('2X');
-          const notOther = !text.includes('4K') && !text.includes('1K') && !text.includes('Upgrade');
+    for (let try2k = 1; try2k <= 4; try2k++) {
+      // Find element containing "2K"
+      const opt2KHandle = await page.evaluateHandle(() => {
+        const all = Array.from(document.querySelectorAll('div, span, button, label, li, p, a'));
+        return all.find(el => {
+          const t = el.textContent?.trim() || '';
+          const has2K = t.includes('2K') || t.includes('2k') || t.includes('2x') || t.includes('2X');
+          const notOther = !t.includes('4K') && !t.includes('1K') && !t.includes('Upgrade');
           return has2K && notOther && el.offsetParent !== null;
-        });
-
-        if (opt2K) {
-          const btnInside = opt2K.querySelector('button') || opt2K;
-          btnInside.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-          btnInside.click();
-          return true;
-        }
-
-        // Fallback: search for element containing "Upscale"
-        const upscaleBtn = allEls.find(el => {
-          const t = el.textContent?.trim().toLowerCase() || '';
-          return (t === 'upscale' || t === 'upscaled' || t.includes('upscale')) && !t.includes('upgrade') && el.offsetParent !== null;
-        });
-        if (upscaleBtn) {
-          upscaleBtn.click();
-          return true;
-        }
-
-        return false;
+        }) || null;
       });
 
-      if (option2KClicked) {
-        console.log(`   ⏳ "2K" option clicked! Upscaling started...`);
-        break;
+      if (opt2KHandle && opt2KHandle.asElement()) {
+        const box = await opt2KHandle.asElement().boundingBox();
+        if (box) {
+          console.log(`   📍 Physical click on 2K option at (${Math.round(box.x + box.width / 2)}, ${Math.round(box.y + box.height / 2)})...`);
+          await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+          await page.waitForTimeout(150);
+          await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+          await opt2KHandle.asElement().click({ force: true }).catch(() => {});
+          option2KClicked = true;
+          console.log(`   ⏳ "2K" option clicked! Upscaling started...`);
+          break;
+        }
       }
+
+      // Positional fallback below Download button: 2K is ~110px below Download button
+      if (!option2KClicked && downloadButtonBox) {
+        console.log(`   📍 Positional click on 2K row below Download button...`);
+        await page.mouse.click(downloadButtonBox.x, downloadButtonBox.y + 110);
+        await page.waitForTimeout(1000);
+      }
+
       await page.waitForTimeout(1000);
     }
 
