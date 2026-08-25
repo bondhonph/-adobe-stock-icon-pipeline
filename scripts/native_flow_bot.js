@@ -574,48 +574,38 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       }
     });
 
-    // 1. Locate Download button by SVG path / icon position and click to open dropdown
+    const viewport = await page.evaluate(() => ({
+      width: window.innerWidth,
+      height: window.innerHeight
+    })).catch(() => ({ width: 1920, height: 1080 }));
+
+    // 1. Locate Download button via Playwright locators first, then SVG/positional fallback
     for (let tryDl = 1; tryDl <= 5; tryDl++) {
-      // Find all buttons in top toolbar (y < 80)
-      const toolbarButtons = await page.$$('button, [role="button"]');
       let dlHandle = null;
       let candidateBox = null;
 
-      // Method A: Match by aria-label
-      for (const btn of toolbarButtons) {
-        const aria = (await btn.getAttribute('aria-label') || '').toLowerCase();
-        if (aria.includes('download') || aria.includes('save')) {
-          const b = await btn.boundingBox();
+      // Method 1: Playwright locator by aria-label
+      const byAria = page.locator('button[aria-label*="Download" i], button[aria-label*="download" i], [role="button"][aria-label*="Download" i]').first();
+      if (await byAria.isVisible().catch(() => false)) {
+        dlHandle = byAria;
+        candidateBox = await byAria.boundingBox();
+      }
+
+      // Method 2: Playwright locator by SVG download path
+      if (!candidateBox) {
+        const bySvg = page.locator('button:has(svg path[d*="M19"]), button:has(svg path[d*="M5"]), button:has(svg path[d*="12 16"]), button:has(svg path[d*="download"])').first();
+        if (await bySvg.isVisible().catch(() => false)) {
+          const b = await bySvg.boundingBox();
           if (b && b.y < 80) {
-            dlHandle = btn;
+            dlHandle = bySvg;
             candidateBox = b;
-            break;
           }
         }
       }
 
-      // Method B: Match Download SVG path (downward arrow icon)
+      // Method 3: Header icon cluster positioning relative to "Done" button
       if (!candidateBox) {
-        for (const btn of toolbarButtons) {
-          const b = await btn.boundingBox();
-          if (b && b.y < 80 && b.width < 60 && b.width > 20 && b.x > window.innerWidth * 0.5) {
-            const hasDownArrow = await btn.evaluate(el => {
-              const svg = el.querySelector('svg');
-              if (!svg) return false;
-              const paths = Array.from(svg.querySelectorAll('path')).map(p => p.getAttribute('d') || '');
-              return paths.some(d => d.includes('M19') || d.includes('M5') || d.includes('12 16') || d.includes('arrow') || d.includes('download'));
-            });
-            if (hasDownArrow) {
-              dlHandle = btn;
-              candidateBox = b;
-              break;
-            }
-          }
-        }
-      }
-
-      // Method C: Header icon cluster positioning relative to "Done" button
-      if (!candidateBox) {
+        const toolbarButtons = await page.$$('button, [role="button"]');
         const doneHandle = await page.$('button:has-text("Done")');
         const doneBox = doneHandle ? await doneHandle.boundingBox() : null;
 
@@ -647,7 +637,9 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
         await page.mouse.move(targetX, targetY);
         await page.waitForTimeout(100);
         await page.mouse.click(targetX, targetY);
-        if (dlHandle) await dlHandle.click({ force: true }).catch(() => {});
+        if (dlHandle && typeof dlHandle.click === 'function') {
+          await dlHandle.click({ force: true }).catch(() => {});
+        }
         await page.waitForTimeout(1200);
 
         // Verify dropdown opened
