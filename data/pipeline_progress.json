@@ -1,34 +1,4 @@
 {
-  "completedTopicIds": [
-    1,
-    2,
-    3,
-    4
-  ],
-  "topics": {
-    "1": {
-      "topic": "Business Strategy & Management",
-      "lineArtFile": "1_Business_Strategy_Management_LineArt.jpeg",
-      "solidFile": "1_Business_Strategy_Management_Solid.jpeg",
-      "completedAt": "2026-08-24T16:03:13.349Z"
-    },
-    "2": {
-      "topic": "Artificial Intelligence & Machine Learning",
-      "lineArtFile": "2_Artificial_Intelligence_Machine_Learning_LineArt.jpeg",
-      "solidFile": "2_Artificial_Intelligence_Machine_Learning_Solid.jpeg",
-      "completedAt": "2026-08-24T16:05:54.778Z"
-    },
-    "3": {
-      "topic": "Cybersecurity & Data Protection",
-      "lineArtFile": "3_Cybersecurity_Data_Protection_LineArt.jpeg",
-      "solidFile": "3_Cybersecurity_Data_Protection_Solid.jpeg",
-      "completedAt": "2026-08-24T16:08:13.890Z"
-    },
-    "4": {
-      "topic": "Digital Marketing & Advertising",
-      "lineArtFile": "4_Digital_Marketing_Advertising_LineArt.jpeg",
-      "solidFile": "4_Digital_Marketing_Advertising_Solid.jpeg",
-      "completedAt": "2026-08-24T16:10:33.023Z"
-    }
-  }
+  "completedTopicIds": [],
+  "topics": {}
 }
