@@ -12,7 +12,7 @@ const AUTO_DOWNLOAD_DIR = path.join(WORKSPACE_DIR, 'Auto-Download');
 const PROGRESS_FILE = path.join(APP_DIR, 'data', 'pipeline_progress.json');
 const TOPICS_FILE = path.join(APP_DIR, 'public', 'topics.json');
 
-// Ensure Auto-Download directory exists
+// Ensure Auto-Download is a valid directory
 try {
   if (fs.existsSync(AUTO_DOWNLOAD_DIR) && !fs.statSync(AUTO_DOWNLOAD_DIR).isDirectory()) {
     fs.unlinkSync(AUTO_DOWNLOAD_DIR);
@@ -115,7 +115,7 @@ function sanitizeName(name) {
 // ==============================================================================
 async function runNativeAutoPilot() {
   console.log('================================================================');
-  console.log('🚀 100% UNATTENDED AUTONOMOUS FLOW BOT (Strict 1-by-1 Pipeline)');
+  console.log('🚀 100% UNATTENDED AUTONOMOUS FLOW BOT (Enhanced New Data Engine)');
   console.log('================================================================');
   console.log(`📋 Total Topics Loaded: ${allTopics.length}`);
   console.log(`🎯 Processing Range: #${startId} to #${endId} (${targetTopics.length} Topics)`);
@@ -183,7 +183,7 @@ async function runNativeAutoPilot() {
     let lineArtSuccess = false;
     if (!fs.existsSync(lineArtTarget) || fs.statSync(lineArtTarget).size < 10240) {
       console.log(`🎨 [1/2] Processing Line Art (Generate ➡️ Download)...`);
-      lineArtSuccess = await processFlowGeneration(page, lineArt, 'Line Art', AUTO_DOWNLOAD_DIR, lineArtFileName);
+      lineArtSuccess = await executeFlowStepWithRetry(page, lineArt, 'Line Art', AUTO_DOWNLOAD_DIR, lineArtFileName);
     } else {
       console.log(`   ⏩ Line Art already exists on disk.`);
       lineArtSuccess = true;
@@ -196,7 +196,7 @@ async function runNativeAutoPilot() {
     let solidSuccess = false;
     if (!fs.existsSync(solidTarget) || fs.statSync(solidTarget).size < 10240) {
       console.log(`🎨 [2/2] Processing Solid Fill (Generate ➡️ Download)...`);
-      solidSuccess = await processFlowGeneration(page, solid, 'Solid', AUTO_DOWNLOAD_DIR, solidFileName);
+      solidSuccess = await executeFlowStepWithRetry(page, solid, 'Solid', AUTO_DOWNLOAD_DIR, solidFileName);
     } else {
       console.log(`   ⏩ Solid Fill already exists on disk.`);
       solidSuccess = true;
@@ -293,8 +293,20 @@ async function waitForSlateEditor(page) {
 }
 
 // ==============================================================================
-// STEP-BY-STEP PROMPT GENERATION & IMMEDIATE DOWNLOAD
+// STEP-BY-STEP PROMPT GENERATION & IMMEDIATE DOWNLOAD (With Retry)
 // ==============================================================================
+async function executeFlowStepWithRetry(page, promptText, styleType, destDir, fileName) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    if (attempt > 1) {
+      console.log(`   🔁 Retrying ${styleType} step (Attempt 2/2)...`);
+      await page.waitForTimeout(2000);
+    }
+    const success = await processFlowGeneration(page, promptText, styleType, destDir, fileName);
+    if (success) return true;
+  }
+  return false;
+}
+
 async function processFlowGeneration(page, promptText, styleType, destDir, fileName) {
   const targetPath = path.join(destDir, fileName);
 
@@ -302,8 +314,8 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
 
     // 1. Snapshot all existing image src URLs BEFORE submitting new prompt
-    const existingSrcs = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll('img')).map(img => img.src).filter(Boolean);
+    const initialImgSrcs = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll('img')).map(img => img.currentSrc || img.src).filter(Boolean);
     });
 
     // 2. Focus & Clear Slate Editor
@@ -316,7 +328,7 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     await editor.click();
     await page.waitForTimeout(200);
 
-    // Clean editor via DOM and keyboard
+    // Clear editor via DOM and keyboard
     await page.evaluate(() => {
       const el = document.querySelector('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]');
       if (el) {
@@ -333,27 +345,51 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     await page.keyboard.press('Backspace');
     await page.waitForTimeout(200);
 
-    // Type new prompt
+    // Type new prompt via Slate event dispatch & hardware keyboard
+    await page.evaluate((text) => {
+      const el = document.querySelector('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]');
+      if (el) {
+        el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: text }));
+        document.execCommand('insertText', false, text);
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
+      }
+    }, promptText);
+
     await page.keyboard.insertText(promptText);
     await page.waitForTimeout(300);
+
+    // Verify text landed in editor
+    const typedOk = await page.evaluate(() => {
+      const el = document.querySelector('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]');
+      return (el?.textContent || '').trim().length > 20;
+    });
+
+    if (!typedOk) {
+      console.warn('   ⚠️ Prompt text not detected in editor, re-inserting...');
+      await editor.click();
+      await page.keyboard.insertText(promptText);
+      await page.waitForTimeout(300);
+    }
 
     // 3. Submit Prompt (Click Submit Arrow & Press Enter)
     console.log(`   🚀 Submitting ${styleType} prompt to Google Flow...`);
     
-    // Click submit button
+    // Click submit button (Arrow near bottom-right)
     await page.evaluate(() => {
       const ed = document.querySelector('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]');
       if (!ed) return;
       const pRect = ed.getBoundingClientRect();
-      const buttons = Array.from(document.querySelectorAll('button, [role="button"], div[class*="button"], svg'));
-      const submitBtn = buttons.find(b => {
-        const r = b.getBoundingClientRect();
-        const isNear = (r.bottom >= pRect.top && r.bottom <= pRect.bottom + 100 && r.right >= pRect.right - 140);
-        const notSpecial = !b.textContent?.toLowerCase().includes('agent') && !b.textContent?.toLowerCase().includes('banana');
-        return isNear && notSpecial && r.width > 0;
+      const candidates = Array.from(document.querySelectorAll('button, [role="button"], div[class*="button"], svg, path'));
+      const submitBtn = candidates.find(el => {
+        const r = el.getBoundingClientRect();
+        const isNearBottomRight = (r.bottom >= pRect.bottom - 15) && (r.bottom <= pRect.bottom + 80) && (r.right >= pRect.right - 100);
+        const notSpecial = !el.textContent?.toLowerCase().includes('agent') && !el.textContent?.toLowerCase().includes('banana');
+        return isNearBottomRight && notSpecial && r.width > 0 && r.height > 0;
       });
+
       if (submitBtn) {
         submitBtn.removeAttribute('disabled');
+        submitBtn.removeAttribute('aria-disabled');
         submitBtn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
         submitBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
         submitBtn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
@@ -370,6 +406,7 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     let newImageSrc = null;
     const startTime = Date.now();
     const maxWaitMs = 65000;
+    let stableCount = 0;
 
     while (Date.now() - startTime < maxWaitMs) {
       await page.waitForTimeout(1500);
@@ -381,27 +418,32 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
 
       const check = await page.evaluate((prevSrcs) => {
         const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
-          const s = img.src || '';
+          const s = img.currentSrc || img.src || '';
           const isReal = s.includes('googleusercontent.com') || s.startsWith('blob:') || s.startsWith('data:') || s.includes('labs.google');
           const isSpinner = !!img.closest('[class*="loading"], [class*="spinner"]') || (img.naturalWidth > 0 && img.naturalWidth < 100);
           return isReal && !isSpinner;
         });
 
         // Find the newest image that was NOT present before
-        const fresh = imgs.find(img => !prevSrcs.includes(img.src));
-        if (fresh && fresh.complete && (fresh.naturalWidth >= 200 || fresh.src.startsWith('blob:'))) {
-          return { found: true, src: fresh.src, width: fresh.naturalWidth, height: fresh.naturalHeight };
+        const fresh = imgs.find(img => !prevSrcs.includes(img.currentSrc || img.src));
+        const isSpinning = !!document.querySelector('div[class*="loading" i], div[class*="spinner" i], div[class*="progress" i], [aria-busy="true"], div[role="progressbar"]');
+
+        if (fresh && fresh.complete && !isSpinning && (fresh.naturalWidth >= 200 || (fresh.src && fresh.src.startsWith('blob:')))) {
+          return { found: true, src: fresh.currentSrc || fresh.src, width: fresh.naturalWidth, height: fresh.naturalHeight };
         }
 
-        // Check if any spinner is active
-        const isSpinning = !!document.querySelector('div[class*="loading"], div[class*="spinner"], div[class*="progress"], svg[class*="spin"]');
         return { found: false, isSpinning, count: imgs.length };
-      }, existingSrcs);
+      }, initialImgSrcs);
 
       if (check.found && Date.now() - startTime > 12000) {
-        newImageSrc = check.src;
-        console.log(`   ✨ NEW ${styleType} image rendered (${check.width}x${check.height})!`);
-        break;
+        stableCount++;
+        if (stableCount >= 2) {
+          newImageSrc = check.src;
+          console.log(`   ✨ NEW ${styleType} image rendered (${check.width}x${check.height})!`);
+          break;
+        }
+      } else {
+        stableCount = 0;
       }
     }
 
@@ -452,11 +494,11 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     try {
       const base64Data = await page.evaluate(async (targetSrc) => {
         const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
-          const src = img.src || '';
+          const src = img.currentSrc || img.src || '';
           return src.includes('googleusercontent.com') || src.startsWith('blob:') || src.startsWith('data:') || src.includes('labs.google');
         });
 
-        const targetImg = (targetSrc ? imgs.find(i => i.src === targetSrc) : null) || imgs[imgs.length - 1];
+        const targetImg = (targetSrc ? imgs.find(i => (i.currentSrc || i.src) === targetSrc) : null) || imgs[imgs.length - 1];
         if (targetImg) {
           try {
             const res = await fetch(targetImg.src);
