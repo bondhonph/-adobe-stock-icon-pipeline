@@ -471,8 +471,65 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       }
     }
 
-    // 5. Extract & Save the New Image Directly from the Canvas (Zero UI disruption)
-    console.log(`   💾 Saving high-resolution image to Auto-Download folder...`);
+    // 5. Trigger Official 2x Upscale & Download
+    console.log(`   🔍 Triggering Official 2x Upscale & Download...`);
+    
+    // Set up download event listener (10s timeout)
+    const downloadPromise = page.waitForEvent('download', { timeout: 10000 }).catch(() => null);
+
+    // Hover over newest card and click 3-dot (⋮) -> Download -> 2x
+    try {
+      const cards = await page.$$('div[class*="node"], div[class*="card"], div[class*="image-container"], div[class*="nodeWrapper"]');
+      if (cards.length > 0) {
+        const latest = cards[cards.length - 1];
+        await latest.hover({ force: true, timeout: 1500 }).catch(() => {});
+        await page.waitForTimeout(400);
+
+        const menuBtn = await latest.$('button[aria-label*="more" i], button[aria-label*="options" i], button:has-text("⋮"), button:has(svg)');
+        if (menuBtn) {
+          await menuBtn.click({ force: true, timeout: 1500 }).catch(() => {});
+          await page.waitForTimeout(500);
+        }
+      }
+
+      // Step A: In any opened menu, look for "Download"
+      await page.evaluate(() => {
+        const items = Array.from(document.querySelectorAll('div[role="menuitem"], button, div, span, li, a'));
+        const dl = items.find(el => el.textContent?.trim().toLowerCase() === 'download' || el.getAttribute('aria-label')?.toLowerCase().includes('download'));
+        if (dl) {
+          dl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+          dl.click();
+        }
+      });
+      await page.waitForTimeout(500);
+
+      // Step B: In resolution menu/modal, look for "2x" or "Upscale"
+      await page.evaluate(() => {
+        const items = Array.from(document.querySelectorAll('div[role="menuitem"], button, div, span, li, a'));
+        const opt2x = items.find(el => {
+          const t = el.textContent?.trim();
+          return t === '2x' || t === '2X' || t?.includes('2x') || t?.includes('2X') || t?.toLowerCase().includes('upscale');
+        });
+        if (opt2x) {
+          opt2x.click();
+        }
+      });
+    } catch (e) {}
+
+    // Check if official 2x download started
+    const download = await downloadPromise;
+    if (download) {
+      try {
+        await download.saveAs(targetPath);
+        if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
+          console.log(`   ✅ 2x Verified Download Saved: ${targetPath} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
+          return true;
+        }
+      } catch (e) {}
+    }
+
+    // 6. Direct High-Resolution 2K (2048x2048) Buffer Extraction Fallback
+    console.log(`   🔄 Extracting Full 2K 2048x2048 Image Buffer from Canvas...`);
     try {
       const base64Data = await page.evaluate(async (targetSrc) => {
         const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
@@ -482,8 +539,14 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
 
         const targetImg = (targetSrc ? imgs.find(i => (i.currentSrc || i.src) === targetSrc) : null) || imgs[imgs.length - 1];
         if (targetImg) {
+          let url = targetImg.currentSrc || targetImg.src;
+          // Upgrade googleusercontent URL to 2K (2048px)
+          if (url.includes('googleusercontent.com') && url.includes('=')) {
+            url = url.replace(/=s\d+/g, '=s2048').replace(/=w\d+-h\d+/g, '=w2048-h2048');
+          }
+
           try {
-            const res = await fetch(targetImg.src);
+            const res = await fetch(url);
             const blob = await res.blob();
             return new Promise((resolve) => {
               const reader = new FileReader();
@@ -492,10 +555,12 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
             });
           } catch (e) {
             const canvas = document.createElement('canvas');
-            canvas.width = targetImg.naturalWidth || 2048;
-            canvas.height = targetImg.naturalHeight || 2048;
+            canvas.width = 2048;
+            canvas.height = 2048;
             const ctx = canvas.getContext('2d');
-            ctx.drawImage(targetImg, 0, 0);
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(targetImg, 0, 0, 2048, 2048);
             return canvas.toDataURL('image/jpeg', 0.98);
           }
         }
@@ -506,7 +571,7 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
         const dataBuffer = Buffer.from(base64Data.split('base64,')[1], 'base64');
         if (dataBuffer.length > 10240) {
           fs.writeFileSync(targetPath, dataBuffer);
-          console.log(`   ✅ Saved High-Res Image: ${targetPath} (${Math.round(dataBuffer.length / 1024)} KB)`);
+          console.log(`   ✅ Saved 2K High-Res Image: ${targetPath} (${Math.round(dataBuffer.length / 1024)} KB)`);
           return true;
         }
       }
