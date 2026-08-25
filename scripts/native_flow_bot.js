@@ -9,14 +9,20 @@ const WORKSPACE_DIR = path.resolve(__dirname, '..', '..');
 const APP_DIR = path.resolve(__dirname, '..');
 const BOT_PROFILE_DIR = path.join(WORKSPACE_DIR, '.flow_bot_chrome_profile');
 const AUTO_DOWNLOAD_DIR = path.join(WORKSPACE_DIR, 'Auto-Download');
-const LEGACY_LINE_ART_DIR = path.join(WORKSPACE_DIR, '1-50', 'Line Art');
-const LEGACY_SOLID_DIR = path.join(WORKSPACE_DIR, '1-50', 'Solid');
 const PROGRESS_FILE = path.join(APP_DIR, 'data', 'pipeline_progress.json');
 const TOPICS_FILE = path.join(APP_DIR, 'public', 'topics.json');
 
-// Ensure directories exist
+// Ensure Auto-Download is a valid directory
+try {
+  if (fs.existsSync(AUTO_DOWNLOAD_DIR) && !fs.statSync(AUTO_DOWNLOAD_DIR).isDirectory()) {
+    fs.unlinkSync(AUTO_DOWNLOAD_DIR);
+  }
+} catch (e) {}
+
 [AUTO_DOWNLOAD_DIR, BOT_PROFILE_DIR, path.dirname(PROGRESS_FILE)].forEach(dir => {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  try {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  } catch (e) {}
 });
 
 // Load Topics (Single Source of Truth)
@@ -32,8 +38,14 @@ const args = process.argv.slice(2);
 let startId = 1;
 let endId = 500;
 for (let i = 0; i < args.length; i++) {
-  if (args[i] === '--start' && args[i + 1]) startId = parseInt(args[i + 1], 10);
-  if (args[i] === '--end' && args[i + 1]) endId = parseInt(args[i + 1], 10);
+  if (args[i] === '--start' && args[i + 1]) {
+    const parsed = parseInt(args[i + 1], 10);
+    if (!isNaN(parsed)) startId = parsed;
+  }
+  if (args[i] === '--end' && args[i + 1]) {
+    const parsed = parseInt(args[i + 1], 10);
+    if (!isNaN(parsed)) endId = parsed;
+  }
 }
 
 const targetTopics = allTopics.filter(t => t.id >= startId && t.id <= endId);
@@ -62,18 +74,11 @@ function isTopicFullyCompleted(topicId, topicName) {
   const cleanTopic = sanitizeName(topicName);
   const lineArtPath = path.join(AUTO_DOWNLOAD_DIR, `${topicId}_${cleanTopic}_LineArt.jpeg`);
   const solidPath = path.join(AUTO_DOWNLOAD_DIR, `${topicId}_${cleanTopic}_Solid.jpeg`);
-  const legacyLineArtPath = path.join(LEGACY_LINE_ART_DIR, `${topicId}_${cleanTopic}_LineArt.jpeg`);
-  const legacySolidPath = path.join(LEGACY_SOLID_DIR, `${topicId}_${cleanTopic}_Solid.jpeg`);
 
-  const hasLineArt = (fs.existsSync(lineArtPath) && fs.statSync(lineArtPath).size > 1024) ||
-                     (fs.existsSync(legacyLineArtPath) && fs.statSync(legacyLineArtPath).size > 1024);
-  const hasSolid = (fs.existsSync(solidPath) && fs.statSync(solidPath).size > 1024) ||
-                   (fs.existsSync(legacySolidPath) && fs.statSync(legacySolidPath).size > 1024);
+  const hasLineArt = fs.existsSync(lineArtPath) && fs.statSync(lineArtPath).size > 1024;
+  const hasSolid = fs.existsSync(solidPath) && fs.statSync(solidPath).size > 1024;
 
-  const progress = loadProgress();
-  const inLedger = progress.completedTopicIds && progress.completedTopicIds.includes(topicId);
-
-  return (hasLineArt && hasSolid) || inLedger;
+  return hasLineArt && hasSolid;
 }
 
 function recordTopicCompletion(topicId, topicName, lineArtFile, solidFile) {
@@ -201,10 +206,10 @@ async function runNativeAutoPilot() {
       recordTopicCompletion(item.id, item.topic, lineArtFileName, solidFileName);
       console.log(`✅ Finished Topic #${item.id}: Both images generated & saved in Auto-Download!`);
     } else {
-      console.warn(`⚠️ Topic #${item.id} will be resumed on next run.`);
+      console.warn(`⚠️ Topic #${item.id} had partial issues. Will retry on next run.`);
     }
 
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(2500);
   }
 
   console.log('\n🎉🎉🎉 100% COMPLETE! All topics processed, generated & saved! 🎉🎉🎉');
@@ -294,6 +299,11 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
   const targetPath = path.join(destDir, fileName);
 
   try {
+    // Ensure destination directory exists before writing
+    if (!fs.existsSync(destDir)) {
+      fs.mkdirSync(destDir, { recursive: true });
+    }
+
     // 1. Focus Slate Editor & Clear
     const editor = await page.$('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]');
     if (!editor) {
@@ -450,8 +460,7 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       return true;
     }
 
-    console.log(`   ℹ️ Generation step completed.`);
-    return true;
+    return false;
   } catch (err) {
     console.error(`   ❌ Error processing ${styleType}:`, err.message);
     return false;

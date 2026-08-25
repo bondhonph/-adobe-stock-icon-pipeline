@@ -1,41 +1,13 @@
 {
   "completedTopicIds": [
-    1,
-    2,
-    3,
-    4,
-    5
+    367
   ],
   "topics": {
-    "1": {
-      "topic": "Business Strategy & Management",
-      "lineArtFile": "1_Business_Strategy_Management_LineArt.jpeg",
-      "solidFile": "1_Business_Strategy_Management_Solid.jpeg",
-      "completedAt": "2026-08-25T06:40:52.448Z"
-    },
-    "2": {
-      "topic": "Artificial Intelligence & Machine Learning",
-      "lineArtFile": "2_Artificial_Intelligence_Machine_Learning_LineArt.jpeg",
-      "solidFile": "2_Artificial_Intelligence_Machine_Learning_Solid.jpeg",
-      "completedAt": "2026-08-25T06:51:41.572Z"
-    },
-    "3": {
-      "topic": "Cybersecurity & Data Protection",
-      "lineArtFile": "3_Cybersecurity_Data_Protection_LineArt.jpeg",
-      "solidFile": "3_Cybersecurity_Data_Protection_Solid.jpeg",
-      "completedAt": "2026-08-25T06:52:55.475Z"
-    },
-    "4": {
-      "topic": "Digital Marketing & Advertising",
-      "lineArtFile": "4_Digital_Marketing_Advertising_LineArt.jpeg",
-      "solidFile": "4_Digital_Marketing_Advertising_Solid.jpeg",
-      "completedAt": "2026-08-25T06:54:01.036Z"
-    },
-    "5": {
-      "topic": "Finance & Investment",
-      "lineArtFile": "5_Finance_Investment_LineArt.jpeg",
-      "solidFile": "5_Finance_Investment_Solid.jpeg",
-      "completedAt": "2026-08-25T06:54:44.688Z"
+    "367": {
+      "topic": "Enterprise Content Management",
+      "lineArtFile": "367_Enterprise_Content_Management_LineArt.jpeg",
+      "solidFile": "367_Enterprise_Content_Management_Solid.jpeg",
+      "completedAt": "2026-08-25T12:44:00.994Z"
     }
   }
 }
