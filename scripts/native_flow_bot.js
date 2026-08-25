@@ -3,18 +3,19 @@ const path = require('path');
 const fs = require('fs');
 
 // ==============================================================================
-// CONFIGURATION & PATHS
+// CONFIGURATION & PATHS (All images saved into single "Auto-Download" folder)
 // ==============================================================================
 const WORKSPACE_DIR = path.resolve(__dirname, '..', '..');
 const APP_DIR = path.resolve(__dirname, '..');
 const BOT_PROFILE_DIR = path.join(WORKSPACE_DIR, '.flow_bot_chrome_profile');
-const LINE_ART_DIR = path.join(WORKSPACE_DIR, '1-50', 'Line Art');
-const SOLID_DIR = path.join(WORKSPACE_DIR, '1-50', 'Solid');
+const AUTO_DOWNLOAD_DIR = path.join(WORKSPACE_DIR, 'Auto-Download');
+const LEGACY_LINE_ART_DIR = path.join(WORKSPACE_DIR, '1-50', 'Line Art');
+const LEGACY_SOLID_DIR = path.join(WORKSPACE_DIR, '1-50', 'Solid');
 const PROGRESS_FILE = path.join(APP_DIR, 'data', 'pipeline_progress.json');
 const TOPICS_FILE = path.join(APP_DIR, 'public', 'topics.json');
 
-// Ensure all required directories exist
-[LINE_ART_DIR, SOLID_DIR, BOT_PROFILE_DIR, path.dirname(PROGRESS_FILE)].forEach(dir => {
+// Ensure directories exist
+[AUTO_DOWNLOAD_DIR, BOT_PROFILE_DIR, path.dirname(PROGRESS_FILE)].forEach(dir => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
 
@@ -59,11 +60,15 @@ function saveProgress(progress) {
 
 function isTopicFullyCompleted(topicId, topicName) {
   const cleanTopic = sanitizeName(topicName);
-  const lineArtPath = path.join(LINE_ART_DIR, `${topicId}_${cleanTopic}_LineArt.jpeg`);
-  const solidPath = path.join(SOLID_DIR, `${topicId}_${cleanTopic}_Solid.jpeg`);
+  const lineArtPath = path.join(AUTO_DOWNLOAD_DIR, `${topicId}_${cleanTopic}_LineArt.jpeg`);
+  const solidPath = path.join(AUTO_DOWNLOAD_DIR, `${topicId}_${cleanTopic}_Solid.jpeg`);
+  const legacyLineArtPath = path.join(LEGACY_LINE_ART_DIR, `${topicId}_${cleanTopic}_LineArt.jpeg`);
+  const legacySolidPath = path.join(LEGACY_SOLID_DIR, `${topicId}_${cleanTopic}_Solid.jpeg`);
 
-  const hasLineArt = fs.existsSync(lineArtPath) && fs.statSync(lineArtPath).size > 1024;
-  const hasSolid = fs.existsSync(solidPath) && fs.statSync(solidPath).size > 1024;
+  const hasLineArt = (fs.existsSync(lineArtPath) && fs.statSync(lineArtPath).size > 1024) ||
+                     (fs.existsSync(legacyLineArtPath) && fs.statSync(legacyLineArtPath).size > 1024);
+  const hasSolid = (fs.existsSync(solidPath) && fs.statSync(solidPath).size > 1024) ||
+                   (fs.existsSync(legacySolidPath) && fs.statSync(legacySolidPath).size > 1024);
 
   const progress = loadProgress();
   const inLedger = progress.completedTopicIds && progress.completedTopicIds.includes(topicId);
@@ -101,20 +106,22 @@ function sanitizeName(name) {
 }
 
 // ==============================================================================
-// MAIN AUTONOMOUS WORKFLOW
+// MAIN AUTONOMOUS WORKFLOW (Strict 1-by-1 Generate -> Download Sequence)
 // ==============================================================================
 async function runNativeAutoPilot() {
   console.log('================================================================');
-  console.log('🚀 100% UNATTENDED AUTONOMOUS FLOW BOT (Hardware OS Automation)');
+  console.log('🚀 100% UNATTENDED AUTONOMOUS FLOW BOT (Strict 1-by-1 Pipeline)');
   console.log('================================================================');
   console.log(`📋 Total Topics Loaded: ${allTopics.length}`);
-  console.log(`🎯 Processing Range: #${startId} to #${endId} (${targetTopics.length} Topics)\n`);
+  console.log(`🎯 Processing Range: #${startId} to #${endId} (${targetTopics.length} Topics)`);
+  console.log(`📁 Unified Output Folder: ${AUTO_DOWNLOAD_DIR}\n`);
 
   console.log('🌐 Launching Chrome dedicated automation browser...');
   const context = await chromium.launchPersistentContext(BOT_PROFILE_DIR, {
     headless: false,
     channel: 'chrome',
     acceptDownloads: true,
+    downloadsPath: AUTO_DOWNLOAD_DIR,
     args: [
       '--start-maximized',
       '--no-first-run',
@@ -152,8 +159,8 @@ async function runNativeAutoPilot() {
     const cleanTopic = sanitizeName(item.topic);
     const lineArtFileName = `${item.id}_${cleanTopic}_LineArt.jpeg`;
     const solidFileName = `${item.id}_${cleanTopic}_Solid.jpeg`;
-    const lineArtTarget = path.join(LINE_ART_DIR, lineArtFileName);
-    const solidTarget = path.join(SOLID_DIR, solidFileName);
+    const lineArtTarget = path.join(AUTO_DOWNLOAD_DIR, lineArtFileName);
+    const solidTarget = path.join(AUTO_DOWNLOAD_DIR, solidFileName);
 
     // Resumability Check
     if (isTopicFullyCompleted(item.id, item.topic)) {
@@ -167,21 +174,24 @@ async function runNativeAutoPilot() {
 
     const { lineArt, solid } = generatePrompts(item.topic);
 
-    // 1. Process Line Art
+    // STEP 1: Generate Line Art -> Immediately Download & Save Line Art
     let lineArtSuccess = false;
     if (!fs.existsSync(lineArtTarget) || fs.statSync(lineArtTarget).size < 1024) {
-      console.log(`🎨 [1/2] Processing Line Art...`);
-      lineArtSuccess = await processFlowGeneration(page, lineArt, 'Line Art', LINE_ART_DIR, lineArtFileName);
+      console.log(`🎨 [1/2] Processing Line Art (Generate ➡️ Download)...`);
+      lineArtSuccess = await processFlowGeneration(page, lineArt, 'Line Art', AUTO_DOWNLOAD_DIR, lineArtFileName);
     } else {
       console.log(`   ⏩ Line Art already exists on disk.`);
       lineArtSuccess = true;
     }
 
-    // 2. Process Solid Fill
+    // Brief pause between images
+    await page.waitForTimeout(2000);
+
+    // STEP 2: Generate Solid Fill -> Immediately Download & Save Solid Fill
     let solidSuccess = false;
     if (!fs.existsSync(solidTarget) || fs.statSync(solidTarget).size < 1024) {
-      console.log(`🎨 [2/2] Processing Solid Fill...`);
-      solidSuccess = await processFlowGeneration(page, solid, 'Solid', SOLID_DIR, solidFileName);
+      console.log(`🎨 [2/2] Processing Solid Fill (Generate ➡️ Download)...`);
+      solidSuccess = await processFlowGeneration(page, solid, 'Solid', AUTO_DOWNLOAD_DIR, solidFileName);
     } else {
       console.log(`   ⏩ Solid Fill already exists on disk.`);
       solidSuccess = true;
@@ -189,17 +199,16 @@ async function runNativeAutoPilot() {
 
     if (lineArtSuccess && solidSuccess) {
       recordTopicCompletion(item.id, item.topic, lineArtFileName, solidFileName);
-      console.log(`✅ Finished Topic #${item.id}: Both Line Art & Solid 2x Upscaled & Verified Saved!`);
+      console.log(`✅ Finished Topic #${item.id}: Both images generated & saved in Auto-Download!`);
     } else {
-      console.warn(`⚠️ Topic #${item.id} had partial issues. Will retry on next run.`);
+      console.warn(`⚠️ Topic #${item.id} will be resumed on next run.`);
     }
 
     await page.waitForTimeout(3000);
   }
 
   console.log('\n🎉🎉🎉 100% COMPLETE! All topics processed, generated & saved! 🎉🎉🎉');
-  console.log(`📁 Line Art folder: ${LINE_ART_DIR}`);
-  console.log(`📁 Solid Fill folder: ${SOLID_DIR}`);
+  console.log(`📁 All files are in: ${AUTO_DOWNLOAD_DIR}`);
 }
 
 // ==============================================================================
@@ -279,13 +288,13 @@ async function waitForSlateEditor(page) {
 }
 
 // ==============================================================================
-// STEP-BY-STEP PROMPT GENERATION, UPSCALE & VERIFIED DOWNLOAD
+// STEP-BY-STEP PROMPT GENERATION & IMMEDIATE DOWNLOAD
 // ==============================================================================
 async function processFlowGeneration(page, promptText, styleType, destDir, fileName) {
   const targetPath = path.join(destDir, fileName);
 
   try {
-    // 1. Focus Slate Editor
+    // 1. Focus Slate Editor & Clear
     const editor = await page.$('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]');
     if (!editor) {
       console.log('❌ Could not find prompt editor');
@@ -295,20 +304,19 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     await editor.click();
     await page.waitForTimeout(200);
 
-    // Clear existing text
     await page.keyboard.press('Control+A');
     await page.keyboard.press('Backspace');
     await page.waitForTimeout(200);
 
-    // Type prompt using native hardware keyboard insertion
+    // Type prompt
     await page.keyboard.insertText(promptText);
     await page.waitForTimeout(500);
 
-    // Record baseline count of image cards on canvas before submitting
+    // Baseline image count
     const baselineImageCount = await page.evaluate(() => document.querySelectorAll('img, canvas, div[class*="node"], div[class*="card"]').length);
 
-    // Press hardware Enter key & click submit arrow
-    console.log(`   🚀 Submitting prompt via native Enter key & Arrow click...`);
+    // Submit prompt
+    console.log(`   🚀 Submitting ${styleType} prompt...`);
     await page.keyboard.press('Enter');
 
     try {
@@ -316,15 +324,14 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       if (arrow) await arrow.click({ force: true }).catch(() => {});
     } catch (e) {}
 
-    // 2. Active Generation Completion Detection (Polling without blind sleep)
-    console.log(`   ⏳ Actively monitoring canvas for generation completion...`);
+    // 2. Wait for image generation to complete
+    console.log(`   ⏳ Actively monitoring canvas for ${styleType} generation...`);
     let generationComplete = false;
     const maxWaitTimeMs = 60000;
-    const pollIntervalMs = 1500;
     const startTime = Date.now();
 
     while (Date.now() - startTime < maxWaitTimeMs) {
-      await page.waitForTimeout(pollIntervalMs);
+      await page.waitForTimeout(1500);
 
       const status = await page.evaluate((initialCount) => {
         const isSpinnerVisible = !!document.querySelector('div[class*="loading"], div[class*="spinner"], div[class*="progress"], svg[class*="spin"]');
@@ -333,7 +340,6 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
         return { isSpinnerVisible, hasNewNode };
       }, baselineImageCount);
 
-      // If at least 15 seconds passed and spinner is gone or new node appeared
       if (Date.now() - startTime > 15000 && !status.isSpinnerVisible) {
         generationComplete = true;
         break;
@@ -341,21 +347,21 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     }
 
     if (!generationComplete) {
-      console.log('   ⚠️ Dynamic wait reached safety window (25s), proceeding to upscale...');
-      await page.waitForTimeout(5000);
+      console.log('   ⚠️ Proceeding to download...');
+      await page.waitForTimeout(4000);
     } else {
-      console.log('   ✨ Image generation completed on canvas!');
+      console.log(`   ✨ ${styleType} image rendered on canvas!`);
     }
 
-    // 3. Trigger Download / Save High-Res Image
-    console.log(`   💾 Saving high-resolution image...`);
+    // 3. Trigger Download: Save image immediately
+    console.log(`   💾 Downloading & saving ${styleType} image...`);
     
-    // Auto-remove notification toasts that intercept pointer events
+    // Auto-remove notification toasts
     await page.evaluate(() => {
       document.querySelectorAll('section[aria-label*="Notifications" i], div[class*="toast"], div[class*="hemBBc"]').forEach(el => el.remove());
     }).catch(() => {});
 
-    // Set up download event listener with short safety timeout (5s)
+    // Set up download event listener with 5s timeout
     const downloadPromise = page.waitForEvent('download', { timeout: 5000 }).catch(() => null);
 
     // Fast UI Menu Click Attempt
@@ -367,13 +373,11 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
         await latestCard.click({ force: true, timeout: 1000 }).catch(() => {});
         await page.waitForTimeout(300);
 
-        // Try 3-dot or download buttons
         const menuBtn = await latestCard.$('button');
         if (menuBtn) {
           await menuBtn.click({ force: true, timeout: 1000 }).catch(() => {});
           await page.waitForTimeout(400);
 
-          // Click 2x in menu
           await page.evaluate(() => {
             const items = Array.from(document.querySelectorAll('div, span, button, li, a'));
             const dl = items.find(el => el.textContent?.trim().toLowerCase() === 'download');
@@ -391,7 +395,7 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       try {
         await download.saveAs(targetPath);
         if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 1024) {
-          console.log(`   ✅ Saved & Verified via Download Event: ${targetPath} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
+          console.log(`   ✅ Saved: ${targetPath} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
           return true;
         }
       } catch (e) {}
