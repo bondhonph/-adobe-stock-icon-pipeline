@@ -428,12 +428,11 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     await page.keyboard.press('Enter');
     await page.waitForTimeout(1000);
 
-    // 4. Actively Monitor for the NEW UNIQUE Image & Card Link to render on the Main Canvas Grid
-    console.log(`   ⏳ Monitoring Main Canvas Grid for NEW ${styleType} card (waiting for fresh render)...`);
+    // 4. Actively Monitor for the NEW Image to render on the Main Canvas Grid
+    console.log(`   ⏳ Monitoring Main Canvas Grid for NEW ${styleType} card...`);
     let newImageSrc = null;
-    let targetEditUrl = null;
     const startTime = Date.now();
-    const maxWaitMs = 65000;
+    const maxWaitMs = 70000;
     let stableCount = 0;
 
     while (Date.now() - startTime < maxWaitMs) {
@@ -444,39 +443,34 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
         document.querySelectorAll('section[aria-label*="Notifications" i], div[class*="toast"], div[class*="hemBBc"]').forEach(el => el.remove());
       }).catch(() => {});
 
-      const check = await page.evaluate((prevLinks, prevSrcs) => {
-        const links = Array.from(document.querySelectorAll('a[href*="/edit/"]')).map(a => a.href).filter(Boolean);
-        const freshLink = links.find(l => !prevLinks.includes(l)) || (links.length > 0 ? links[links.length - 1] : null);
-
+      const check = await page.evaluate((prevSrcs) => {
         const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
           const s = img.currentSrc || img.src || '';
           const isReal = s.includes('googleusercontent.com') || s.startsWith('blob:') || s.startsWith('data:') || s.includes('labs.google');
-          const isSpinner = !!img.closest('[class*="loading"], [class*="spinner"]') || (img.naturalWidth > 0 && img.naturalWidth < 100);
+          const isSpinner = !!img.closest('[class*="loading"], [class*="spinner"]') || (img.naturalWidth > 0 && img.naturalWidth < 80);
           return isReal && !isSpinner;
         });
 
         const freshImg = imgs.find(img => !prevSrcs.includes(img.currentSrc || img.src));
         const isSpinning = !!document.querySelector('div[class*="loading" i], div[class*="spinner" i], div[class*="progress" i], [aria-busy="true"], div[role="progressbar"]');
 
-        if ((freshLink || freshImg) && !isSpinning) {
+        if (freshImg && !isSpinning) {
           return {
             found: true,
-            editUrl: freshLink,
-            src: freshImg ? (freshImg.currentSrc || freshImg.src) : null,
-            width: freshImg ? freshImg.naturalWidth : 0,
-            height: freshImg ? freshImg.naturalHeight : 0
+            src: freshImg.currentSrc || freshImg.src,
+            width: freshImg.naturalWidth,
+            height: freshImg.naturalHeight
           };
         }
 
-        return { found: false, isSpinning, count: imgs.length };
-      }, initialEditLinks, initialImgSrcs);
+        return { found: false, count: imgs.length };
+      }, initialImgSrcs);
 
-      if (check.found && Date.now() - startTime > 12000) {
+      if (check.found && Date.now() - startTime > 10000) {
         stableCount++;
         if (stableCount >= 2) {
           newImageSrc = check.src;
-          targetEditUrl = check.editUrl;
-          console.log(`   ✨ NEW ${styleType} card rendered on Main Canvas!`);
+          console.log(`   ✨ NEW ${styleType} card rendered on Main Canvas (${check.width}x${check.height})!`);
           break;
         }
       } else {
@@ -484,55 +478,79 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       }
     }
 
-    // 5. Enter Edit Mode by navigating or clicking the new card
-    console.log(`   🖱️ Entering Edit Mode for 2K Upscaled download...`);
+    // 5. Enter Edit Mode by clicking directly on the newest generated image card
+    console.log(`   🖱️ Clicking newest image on canvas to enter Edit Mode...`);
 
     let inEditMode = false;
-
-    // Direct navigation if we have the edit link
-    if (targetEditUrl && targetEditUrl.includes('/edit/')) {
-      console.log(`   🔗 Opening Card Edit URL: ${targetEditUrl}`);
-      await page.goto(targetEditUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
-      await page.waitForTimeout(2500);
+    for (let attempt = 1; attempt <= 4; attempt++) {
       if (page.url().includes('/edit/')) {
         inEditMode = true;
+        break;
       }
-    }
 
-    if (!inEditMode) {
-      // Try clicking the newest edit link or card
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        if (page.url().includes('/edit/')) {
-          inEditMode = true;
-          break;
+      // Find all image elements on canvas and target the newest one
+      const imgHandles = await page.$$('img');
+      const realImgs = [];
+      for (const h of imgHandles) {
+        const box = await h.boundingBox();
+        if (box && box.width > 80 && box.height > 80) {
+          realImgs.push(h);
         }
+      }
 
-        const editLink = await page.$('a[href*="/edit/"]:last-of-type, div[class*="react-flow__node"]:last-child, img:last-of-type');
-        if (editLink) {
-          const box = await editLink.boundingBox();
-          if (box) {
-            console.log(`   📍 Clicking card at (${Math.round(box.x + box.width / 2)}, ${Math.round(box.y + box.height / 2)})...`);
-            await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-            await page.waitForTimeout(2500);
+      const targetImgHandle = realImgs.length > 0 ? realImgs[realImgs.length - 1] : null;
+
+      if (targetImgHandle) {
+        const box = await targetImgHandle.boundingBox();
+        if (box) {
+          console.log(`   📍 Clicking image at center (${Math.round(box.x + box.width / 2)}, ${Math.round(box.y + box.height / 2)})...`);
+          // Physical mouse click on center of the image card
+          await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+          await page.waitForTimeout(200);
+          await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+          await page.waitForTimeout(2500);
+
+          if (page.url().includes('/edit/')) {
+            inEditMode = true;
+            break;
+          }
+
+          // Try double-clicking the image card
+          console.log(`   📍 Double-clicking image...`);
+          await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+          await page.waitForTimeout(2500);
+
+          if (page.url().includes('/edit/')) {
+            inEditMode = true;
+            break;
           }
         }
       }
+
+      // Check edit links fallback
+      const editLinks = await page.$$('a[href*="/edit/"]');
+      if (editLinks.length > 0) {
+        const lastEditLink = editLinks[editLinks.length - 1];
+        const href = await lastEditLink.getAttribute('href');
+        if (href) {
+          console.log(`   🔗 Navigating directly to card edit URL: ${href}`);
+          await page.goto(href, { waitUntil: 'domcontentloaded' }).catch(() => {});
+          await page.waitForTimeout(2500);
+          if (page.url().includes('/edit/')) {
+            inEditMode = true;
+            break;
+          }
+        }
+      }
+
+      await page.waitForTimeout(1500);
     }
 
     // Verify Edit Mode
     if (page.url().includes('/edit/')) {
       console.log(`   🎨 Successfully entered Edit Mode: ${page.url()}`);
     } else {
-      console.log(`   ⚠️ Retrying entry into Edit Mode...`);
-      // Find latest edit link and goto
-      const latestHref = await page.evaluate(() => {
-        const links = Array.from(document.querySelectorAll('a[href*="/edit/"]'));
-        return links.length > 0 ? links[links.length - 1].href : null;
-      });
-      if (latestHref) {
-        await page.goto(latestHref, { waitUntil: 'domcontentloaded' }).catch(() => {});
-        await page.waitForTimeout(3000);
-      }
+      console.log(`   ⚠️ Retrying Edit Mode detection...`);
     }
 
     await page.waitForTimeout(2000);
