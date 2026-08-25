@@ -548,86 +548,116 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       await page.waitForTimeout(1500);
     }
 
-    // Verify Edit Mode
-    if (page.url().includes('/edit/')) {
-      console.log(`   🎨 Successfully entered Edit Mode: ${page.url()}`);
-    } else {
-      console.log(`   ⚠️ Retrying Edit Mode detection...`);
+    // ============================================================================
+    // 8-STATE STRICT UPSCALE & DOWNLOAD STATE MACHINE
+    // ============================================================================
+
+    // STATE 1: IMAGE_GENERATED -> Verify Edit Mode Active
+    if (!page.url().includes('/edit/')) {
+      console.warn(`   ⚠️ Not in Edit Mode, attempting recovery...`);
+      await page.waitForTimeout(2000);
     }
 
-    await page.waitForTimeout(2000);
-
-    // 6. Set up download listener BEFORE triggering upscale/download
-    let downloadEventPromise = page.waitForEvent('download', { timeout: 120000 }).catch(() => null);
-
-    // 7. Locate and physically click the Download (↓) icon in the top-right toolbar
-    console.log(`   🔍 Finding & clicking Download (↓) icon in top toolbar...`);
+    // STATE 2: UPSCALE_REQUESTED -> Find & Open Download Menu, Click 2K
+    console.log(`   [UPSCALE] Locating Download (↓) icon in toolbar...`);
     let dropdownOpened = false;
+    let downloadButtonBox = null;
 
-    // Find the "Done" button first as the anchor point
-    const doneBtn = await page.$('button:has-text("Done")');
-    let doneBox = doneBtn ? await doneBtn.boundingBox() : null;
+    // Snapshot pre-upscale files in download directories to prevent matching old downloads
+    const preExistingFiles = new Set();
+    const watchDirs = [AUTO_DOWNLOAD_DIR, USER_DOWNLOADS_DIR];
+    watchDirs.forEach(dir => {
+      if (fs.existsSync(dir)) {
+        try {
+          fs.readdirSync(dir).forEach(f => preExistingFiles.add(path.join(dir, f)));
+        } catch (e) {}
+      }
+    });
 
+    // 1. Locate Download button by SVG path / icon position and click to open dropdown
     for (let tryDl = 1; tryDl <= 5; tryDl++) {
-      // Find all buttons in top bar (y < 80)
-      const allBtns = await page.$$('button, [role="button"]');
+      // Find all buttons in top toolbar (y < 80)
+      const toolbarButtons = await page.$$('button, [role="button"]');
       let dlHandle = null;
-      let clickX = null;
-      let clickY = null;
+      let candidateBox = null;
 
-      // Strategy 1: Find button with aria-label or SVG download path
-      for (const btn of allBtns) {
-        const aria = await btn.getAttribute('aria-label');
-        if (aria && (aria.toLowerCase().includes('download') || aria.toLowerCase().includes('save'))) {
+      // Method A: Match by aria-label
+      for (const btn of toolbarButtons) {
+        const aria = (await btn.getAttribute('aria-label') || '').toLowerCase();
+        if (aria.includes('download') || aria.includes('save')) {
           const b = await btn.boundingBox();
           if (b && b.y < 80) {
             dlHandle = btn;
-            clickX = b.x + b.width / 2;
-            clickY = b.y + b.height / 2;
+            candidateBox = b;
             break;
           }
         }
       }
 
-      // Strategy 2: Position relative to Done button (Download is ~215px to left of Done)
-      if (!clickX && doneBox) {
-        // Collect all small icon buttons to the left of Done (x between doneBox.x - 300 and doneBox.x)
-        const iconBtns = [];
-        for (const btn of allBtns) {
+      // Method B: Match Download SVG path (downward arrow icon)
+      if (!candidateBox) {
+        for (const btn of toolbarButtons) {
           const b = await btn.boundingBox();
-          if (b && b.y < 80 && b.width < 50 && b.width > 20 && b.x > doneBox.x - 300 && b.x < doneBox.x - 50) {
-            iconBtns.push({ handle: btn, box: b });
+          if (b && b.y < 80 && b.width < 60 && b.width > 20 && b.x > window.innerWidth * 0.5) {
+            const hasDownArrow = await btn.evaluate(el => {
+              const svg = el.querySelector('svg');
+              if (!svg) return false;
+              const paths = Array.from(svg.querySelectorAll('path')).map(p => p.getAttribute('d') || '');
+              return paths.some(d => d.includes('M19') || d.includes('M5') || d.includes('12 16') || d.includes('arrow') || d.includes('download'));
+            });
+            if (hasDownArrow) {
+              dlHandle = btn;
+              candidateBox = b;
+              break;
+            }
           }
-        }
-        iconBtns.sort((a, b) => a.box.x - b.box.x);
-        // Cluster: [0=Heart (~x-250), 1=Download (~x-215), 2=Trash (~x-180), 3=Share (~x-145)]
-        if (iconBtns.length >= 2) {
-          dlHandle = iconBtns[1].handle;
-          clickX = iconBtns[1].box.x + iconBtns[1].box.width / 2;
-          clickY = iconBtns[1].box.y + iconBtns[1].box.height / 2;
-        } else {
-          // Direct coordinate fallback based on Done button
-          clickX = doneBox.x - 215;
-          clickY = doneBox.y + doneBox.height / 2;
         }
       }
 
-      if (clickX && clickY) {
-        console.log(`   📍 Clicking Download button at (${Math.round(clickX)}, ${Math.round(clickY)})...`);
-        await page.mouse.move(clickX, clickY);
+      // Method C: Header icon cluster positioning relative to "Done" button
+      if (!candidateBox) {
+        const doneHandle = await page.$('button:has-text("Done")');
+        const doneBox = doneHandle ? await doneHandle.boundingBox() : null;
+
+        if (doneBox) {
+          const iconBtns = [];
+          for (const btn of toolbarButtons) {
+            const b = await btn.boundingBox();
+            if (b && b.y < 80 && b.width < 50 && b.width > 20 && b.x > doneBox.x - 320 && b.x < doneBox.x - 40) {
+              iconBtns.push({ handle: btn, box: b });
+            }
+          }
+          iconBtns.sort((a, b) => a.box.x - b.box.x);
+          // Cluster: [0=Heart, 1=Download, 2=Trash, 3=Share]
+          if (iconBtns.length >= 2) {
+            dlHandle = iconBtns[1].handle;
+            candidateBox = iconBtns[1].box;
+          } else if (iconBtns.length === 1) {
+            dlHandle = iconBtns[0].handle;
+            candidateBox = iconBtns[0].box;
+          }
+        }
+      }
+
+      if (candidateBox) {
+        downloadButtonBox = candidateBox;
+        const targetX = candidateBox.x + candidateBox.width / 2;
+        const targetY = candidateBox.y + candidateBox.height / 2;
+
+        await page.mouse.move(targetX, targetY);
         await page.waitForTimeout(100);
-        await page.mouse.click(clickX, clickY);
+        await page.mouse.click(targetX, targetY);
         if (dlHandle) await dlHandle.click({ force: true }).catch(() => {});
         await page.waitForTimeout(1200);
 
-        // Verify dropdown is open by checking for "Original size" or "1K" or "2K" or "Upscaled"
+        // Verify dropdown opened
         dropdownOpened = await page.evaluate(() => {
-          const bodyText = document.body?.innerText || '';
-          return bodyText.includes('Original size') || bodyText.includes('Upscaled');
+          const text = document.body?.innerText || '';
+          return text.includes('Original size') || text.includes('Upscaled') || text.includes('1K') || text.includes('2K');
         });
 
         if (dropdownOpened) {
-          console.log(`   ✅ Download dropdown menu successfully opened!`);
+          console.log(`   [UPSCALE] Download dropdown menu opened successfully.`);
           break;
         }
       }
@@ -635,10 +665,12 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       await page.waitForTimeout(800);
     }
 
-    // 8. In the dropdown popup: Physically click "2K" / "Upscaled"
-    console.log(`   📐 Selecting "2K" Upscaled option from dropdown...`);
+    // STATE 3: UPSCALE_REQUESTED -> Click 2K Option & Trigger Upscaling
+    let upscaleTriggered = false;
+    const upscaleStartTime = Date.now();
+    let downloadEventPromise = page.waitForEvent('download', { timeout: 120000 }).catch(() => null);
 
-    let option2KClicked = false;
+    console.log(`   [UPSCALE] Selecting "2K" (Upscaled) option...`);
     for (let try2k = 1; try2k <= 4; try2k++) {
       // Find element containing "2K"
       const opt2KHandle = await page.evaluateHandle(() => {
@@ -654,110 +686,119 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       if (opt2KHandle && opt2KHandle.asElement()) {
         const box = await opt2KHandle.asElement().boundingBox();
         if (box) {
-          console.log(`   📍 Clicking 2K option at (${Math.round(box.x + box.width / 2)}, ${Math.round(box.y + box.height / 2)})...`);
           await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
           await page.waitForTimeout(100);
           await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
           await opt2KHandle.asElement().click({ force: true }).catch(() => {});
-          option2KClicked = true;
-          console.log(`   🚀 "2K" option clicked! Upscaling started...`);
+          upscaleTriggered = true;
+          console.log(`   [UPSCALE] Requested: "2K" option clicked successfully.`);
           break;
         }
       }
 
-      await page.waitForTimeout(800);
-    }
-
-    // 9. DYNAMIC WAIT: Wait as long as upscaling takes and capture downloaded file
-    console.log(`   ⏳ 2K Upscaling in progress — watching for completed download...`);
-
-    let downloadSuccess = false;
-    const upscaleStartTime = Date.now();
-    const searchDirs = [AUTO_DOWNLOAD_DIR, USER_DOWNLOADS_DIR];
-
-    while (Date.now() - upscaleStartTime < 300000) { // up to 5 mins
-      const elapsedSec = Math.round((Date.now() - upscaleStartTime) / 1000);
-
-      // A. Check Playwright download event
-      const download = await Promise.race([
-        downloadEventPromise,
-        new Promise(resolve => setTimeout(() => resolve('WAITING'), 2000))
-      ]);
-
-      if (download && download !== 'WAITING') {
-        try {
-          await download.saveAs(targetPath);
-          if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
-            const fileSizeKB = Math.round(fs.statSync(targetPath).size / 1024);
-            console.log(`\n   🎉 ✅ 2K Upscaled File Downloaded in ${elapsedSec}s: ${targetPath} (${fileSizeKB} KB)`);
-            downloadSuccess = true;
-            break;
-          }
-        } catch (e) {}
+      // Positional click fallback ~105px directly below download button
+      if (!upscaleTriggered && downloadButtonBox) {
+        await page.mouse.click(downloadButtonBox.x + downloadButtonBox.width / 2, downloadButtonBox.y + 105);
+        await page.waitForTimeout(800);
       }
 
-      // B. Check disk in both Auto-Download and OS Downloads folders
-      for (const dir of searchDirs) {
-        if (!fs.existsSync(dir)) continue;
+      await page.waitForTimeout(600);
+    }
+
+    // STATE 4 & 5: WAITING_FOR_UPSCALE & UPSCALE_CONFIRMED
+    console.log(`   [UPSCALE] Waiting for upscale completion & 2K download stream...`);
+    let downloadSuccess = false;
+    let capturedFile = null;
+    const maxUpscaleWaitMs = 120000; // 2 minutes max safety limit
+
+    while (Date.now() - upscaleStartTime < maxUpscaleWaitMs) {
+      const elapsedSec = Math.round((Date.now() - upscaleStartTime) / 1000);
+
+      // Check Playwright native download event
+      const downloadEvent = await Promise.race([
+        downloadEventPromise,
+        new Promise(resolve => setTimeout(() => resolve('POLLING'), 1500))
+      ]);
+
+      if (downloadEvent && downloadEvent !== 'POLLING') {
         try {
-          const files = fs.readdirSync(dir);
-          const isCrDownloading = files.some(f => f.endsWith('.crdownload'));
+          console.log(`   [DOWNLOAD] Browser download event captured. Saving to: ${targetPath}`);
+          await downloadEvent.saveAs(targetPath);
+          if (fs.existsSync(targetPath)) {
+            // STATE 7: VERIFY_FILE stability
+            let size1 = fs.statSync(targetPath).size;
+            await page.waitForTimeout(1000);
+            let size2 = fs.statSync(targetPath).size;
 
-          if (!isCrDownloading) {
-            const matchingFiles = files.filter(f => {
-              if (!f.endsWith('.jpeg') && !f.endsWith('.jpg') && !f.endsWith('.png')) return false;
-              const fullPath = path.join(dir, f);
-              try {
-                const stat = fs.statSync(fullPath);
-                // Must be modified recently and larger than 100KB
-                return stat.mtimeMs >= upscaleStartTime - 10000 && stat.size > 102400;
-              } catch (e) { return false; }
-            });
-
-            if (matchingFiles.length > 0) {
-              matchingFiles.sort((a, b) => fs.statSync(path.join(dir, b)).mtimeMs - fs.statSync(path.join(dir, a)).mtimeMs);
-              const newestDownloadedFile = path.join(dir, matchingFiles[0]);
-
-              // Copy to targetPath
-              fs.copyFileSync(newestDownloadedFile, targetPath);
-              if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
-                const sizeKB = Math.round(fs.statSync(targetPath).size / 1024);
-                console.log(`\n   🎉 ✅ 2K File Captured from ${path.basename(dir)} in ${elapsedSec}s: ${targetPath} (${sizeKB} KB)`);
-                downloadSuccess = true;
-                break;
-              }
+            if (size2 >= size1 && size2 > 102400) { // Verified > 100KB (typically ~1.8MB)
+              const sizeKB = Math.round(size2 / 1024);
+              console.log(`   [SUCCESS] Verified as current 2K upscale output: ${targetPath} (${sizeKB} KB in ${elapsedSec}s)`);
+              downloadSuccess = true;
+              break;
             }
           }
         } catch (e) {}
       }
 
-      if (downloadSuccess) break;
+      // Check disk in both Auto-Download and OS Downloads folders
+      for (const dir of watchDirs) {
+        if (!fs.existsSync(dir)) continue;
+        try {
+          const currentFiles = fs.readdirSync(dir);
+          const hasActiveCrdownload = currentFiles.some(f => f.endsWith('.crdownload'));
 
-      // C. Check if already at targetPath
-      if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
-        console.log(`\n   🎉 ✅ Verified 2K File on disk (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
-        downloadSuccess = true;
-        break;
+          if (!hasActiveCrdownload) {
+            for (const file of currentFiles) {
+              const fullFilePath = path.join(dir, file);
+              if (preExistingFiles.has(fullFilePath)) continue; // Must be a newly created file
+              if (!file.endsWith('.jpeg') && !file.endsWith('.jpg') && !file.endsWith('.png')) continue;
+
+              const stat = fs.statSync(fullFilePath);
+              // Must be created/modified after upscale started, and larger than 500KB (2K upscaled)
+              if (stat.mtimeMs >= upscaleStartTime - 3000 && stat.size > 307200) {
+                // STATE 7: File size stability check
+                const initialSize = stat.size;
+                await page.waitForTimeout(1000);
+                const recheckStat = fs.statSync(fullFilePath);
+
+                if (recheckStat.size === initialSize) {
+                  fs.copyFileSync(fullFilePath, targetPath);
+                  if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 307200) {
+                    const finalSizeKB = Math.round(fs.statSync(targetPath).size / 1024);
+                    console.log(`\n   [SUCCESS] Captured & Verified 2K File from ${path.basename(dir)} in ${elapsedSec}s: ${targetPath} (${finalSizeKB} KB)`);
+                    downloadSuccess = true;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        } catch (e) {}
+        if (downloadSuccess) break;
       }
 
-      // Check on-page upscaling status toast
-      const isUpscaling = await page.evaluate(() => {
+      if (downloadSuccess) break;
+
+      // Check UI Toast / Status
+      const toastStatus = await page.evaluate(() => {
         const text = document.body?.innerText || '';
-        return text.includes('Upscaling your image') || text.includes('download will start');
+        if (text.includes('Upscaling your image') || text.includes('download will start')) return 'UPSCALING';
+        if (text.includes('Upscaling complete')) return 'COMPLETE';
+        return 'IDLE';
       });
 
-      if (isUpscaling) {
-        process.stdout.write(`\r   ⏳ Upscaling in progress on Google Flow... (${elapsedSec}s elapsed)`);
+      if (toastStatus === 'UPSCALING') {
+        process.stdout.write(`\r   [UPSCALE] In progress on Google Flow... (${elapsedSec}s elapsed)`);
       } else {
-        process.stdout.write(`\r   ⏳ Waiting for 2K download to finish... (${elapsedSec}s elapsed)`);
+        process.stdout.write(`\r   [DOWNLOAD] Waiting for 2K file stream... (${elapsedSec}s elapsed)`);
       }
     }
 
     console.log(''); // newline
 
-    // 10. Fallback: High-Resolution 2K Buffer Extraction if needed
+    // Fallback: If 2K upscale download didn't complete within 120s, perform high-resolution extraction
     if (!downloadSuccess && (!fs.existsSync(targetPath) || fs.statSync(targetPath).size <= 10240)) {
-      console.log(`   🔄 Running 2K High-Res Buffer Extraction Fallback...`);
+      console.warn(`   [ERROR] Upscale download timed out. Executing high-resolution canvas extraction fallback...`);
       try {
         const base64Data = await page.evaluate(async (targetSrc) => {
           const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
@@ -805,7 +846,7 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
           const dataBuffer = Buffer.from(base64Data.split('base64,')[1], 'base64');
           if (dataBuffer.length > 10240) {
             fs.writeFileSync(targetPath, dataBuffer);
-            console.log(`   ✅ Saved 2K High-Res Image: ${targetPath} (${Math.round(dataBuffer.length / 1024)} KB)`);
+            console.log(`   [FALLBACK] Saved extracted 2K image: ${targetPath} (${Math.round(dataBuffer.length / 1024)} KB)`);
             downloadSuccess = true;
           }
         }
@@ -814,16 +855,16 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       }
     }
 
-    // 11. Click "Done" button to return to Main Canvas Grid
+    // STATE 8: SUCCESS -> Exit Edit Mode back to Main Canvas Grid
     await exitEditMode(page);
 
-    // 11. Final verification on disk
+    // Final verification on disk
     if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
-      console.log(`   ✅ Step Complete: ${fileName} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
+      console.log(`   [SUCCESS] Step Complete: ${fileName} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
       return true;
     }
 
-    console.warn(`   ⚠️ File verification failed for ${fileName}`);
+    console.warn(`   ❌ File verification failed for ${fileName}`);
     return false;
   } catch (err) {
     console.error(`   ❌ Error processing ${styleType}:`, err.message);
