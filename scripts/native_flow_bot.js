@@ -513,89 +513,166 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       }
     }
 
-    // 6. Inside Edit Mode: Click Download (↓) button in top-right toolbar → Select 2x
-    console.log(`   🔍 Finding Download button in Edit Mode toolbar...`);
+    // 6. Inside Edit Mode: Click Download (↓) button in top-right toolbar
+    console.log(`   🔍 Clicking Download (↓) icon in Edit Mode toolbar...`);
 
     // Set up download event listener
-    const downloadPromise = page.waitForEvent('download', { timeout: 15000 }).catch(() => null);
+    const downloadPromise = page.waitForEvent('download', { timeout: 20000 }).catch(() => null);
 
     try {
-      // The download button (↓) is in the top-right toolbar area
-      // Try aria-label based selector first
-      let dlBtn = await page.$('button[aria-label*="Download" i], button[aria-label*="download" i]');
+      // ===== STEP A: Click the Download (↓) icon button in the top-right toolbar =====
+      // From screenshot: top-right has heart, DOWNLOAD(↓), delete, share, "Hide history", "Done"
+      // The download icon is a small button with a downward arrow SVG
 
-      if (!dlBtn) {
-        // Find by SVG download icon or by position in top-right area
-        dlBtn = await page.evaluate(() => {
+      let dlClicked = false;
+
+      // Method 1: aria-label
+      const dlBtn = await page.$('button[aria-label*="Download" i], button[aria-label*="download" i]');
+      if (dlBtn && await dlBtn.isVisible().catch(() => false)) {
+        await dlBtn.click({ force: true });
+        dlClicked = true;
+      }
+
+      // Method 2: Find by position — download is the 3rd icon from right in the header
+      // (from right: Done, Hide history, share, delete, DOWNLOAD, heart)
+      if (!dlClicked) {
+        dlClicked = await page.evaluate(() => {
           const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
-          const downloadBtn = btns.find(b => {
-            const aria = b.getAttribute('aria-label')?.toLowerCase() || '';
-            const hasDlSvg = !!b.querySelector('svg path[d*="M19"], svg path[d*="download"]');
-            const rect = b.getBoundingClientRect();
-            // Download button is in top-right area (y < 120, x > 60% of viewport)
-            const isTopRight = rect.top < 120 && rect.left > window.innerWidth * 0.6;
-            return (aria.includes('download') || hasDlSvg) && isTopRight;
+          // Filter buttons in the top header bar (y < 100)
+          const headerBtns = btns.filter(b => {
+            const r = b.getBoundingClientRect();
+            return r.top < 100 && r.height < 50 && r.width < 50 && r.width > 10;
+          }).sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+
+          // The download button has a downward arrow SVG icon
+          // Check each header button for download-like SVG
+          for (const btn of headerBtns) {
+            const svg = btn.querySelector('svg');
+            if (svg) {
+              const paths = svg.querySelectorAll('path');
+              const aria = btn.getAttribute('aria-label')?.toLowerCase() || '';
+              // Download arrows typically have paths pointing downward
+              if (aria.includes('download') || aria.includes('save')) {
+                btn.click();
+                return true;
+              }
+            }
+          }
+
+          // Fallback: download is typically after the heart/favorite icon
+          // Look for the icon sequence in the top bar
+          const iconBtns = headerBtns.filter(b => {
+            const r = b.getBoundingClientRect();
+            return r.left > window.innerWidth * 0.55;
           });
-          if (downloadBtn) {
-            downloadBtn.click();
+          // Download icon is usually the 2nd one (heart=1st, download=2nd)
+          if (iconBtns.length >= 2) {
+            iconBtns[1].click();
             return true;
           }
           return false;
         });
-
-        if (!dlBtn) {
-          // Fallback: Click all buttons in the top-right header area to find download
-          await page.evaluate(() => {
-            const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
-            const topBtns = btns.filter(b => {
-              const r = b.getBoundingClientRect();
-              return r.top < 120 && r.left > window.innerWidth * 0.55 && r.width < 60;
-            }).sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-            // Download icon is typically the 2nd icon in the top-right group
-            // (heart, download, delete, share, hide history, Done)
-            if (topBtns.length >= 2) {
-              topBtns[1].click(); // download is usually 2nd button
-            }
-          });
-        }
-      } else {
-        await dlBtn.click({ force: true });
       }
 
-      await page.waitForTimeout(800);
+      if (dlClicked) {
+        console.log(`   ✅ Download dropdown opened!`);
+      } else {
+        console.log(`   ⚠️ Could not find Download icon, trying keyboard shortcut...`);
+      }
 
-      // Now a resolution picker should appear → Click "2x" or "2X"
-      console.log(`   📐 Selecting 2x resolution...`);
-      await page.evaluate(() => {
-        const items = Array.from(document.querySelectorAll('div, span, button, li, a, label'));
-        const opt2x = items.find(el => {
-          const t = el.textContent?.trim();
-          return (t === '2x' || t === '2X' || t === '2048' || t === '2048 × 2048' || t?.includes('2x') || t?.includes('2X')) && el.offsetParent !== null;
-        });
-        if (opt2x) {
-          opt2x.click();
-          return;
-        }
-        // If no 2x picker, look for the highest resolution option
-        const resOptions = items.filter(el => {
-          const t = el.textContent?.trim();
-          return t && /\d+\s*[x×]\s*\d+/.test(t) && el.offsetParent !== null;
-        });
-        if (resOptions.length > 0) {
-          resOptions[resOptions.length - 1].click(); // last = highest res
-        }
-      });
       await page.waitForTimeout(1000);
 
-      // Click confirm/download button if there is one
+      // ===== STEP B: In the dropdown, click "2K" then "Upscale" button =====
+      // From screenshot: dropdown shows:
+      //   "1K  Original size"  (radio)
+      //   "1K"  (selected)
+      //   "2K"  [Upscale]     ← we want THIS
+      //   "4K"  [Upgrade]
+      //   "Upscaled"
+
+      console.log(`   📐 Selecting 2K resolution and clicking Upscale...`);
+
+      // First, click "2K" label/radio to select it
       await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll('button'));
-        const confirmBtn = btns.find(b => {
-          const t = b.textContent?.trim().toLowerCase();
-          return (t === 'download' || t === 'save' || t === 'confirm' || t === 'ok') && b.offsetParent !== null;
+        const allEls = Array.from(document.querySelectorAll('div, span, button, label, li, a, input'));
+
+        // Click the "2K" text/radio option
+        const opt2K = allEls.find(el => {
+          const t = el.textContent?.trim();
+          return (t === '2K' || t === '2k') && el.offsetParent !== null;
         });
-        if (confirmBtn) confirmBtn.click();
+        if (opt2K) {
+          opt2K.click();
+        }
       });
+      await page.waitForTimeout(500);
+
+      // Then click the "Upscale" button next to 2K
+      const upscaleFound = await page.evaluate(() => {
+        const allEls = Array.from(document.querySelectorAll('button, div, span, a'));
+        const upscaleBtn = allEls.find(el => {
+          const t = el.textContent?.trim().toLowerCase();
+          return (t === 'upscale' || t === 'upscaled') && el.offsetParent !== null;
+        });
+        if (upscaleBtn) {
+          upscaleBtn.click();
+          return true;
+        }
+        return false;
+      });
+
+      if (upscaleFound) {
+        // Wait for upscale processing to finish (can take 5-10 seconds)
+        console.log(`   ⏳ Waiting for 2K upscale to complete...`);
+        await page.waitForTimeout(10000);
+
+        // Take diagnostic screenshot after upscale
+        try {
+          await page.screenshot({ path: path.join(CONFIG.downloadDir, '_debug_after_upscale.png') });
+        } catch (e) {}
+
+        // After upscale completes, re-open download dropdown
+        console.log(`   🔍 Re-opening Download dropdown to download 2K file...`);
+        const dlBtn2 = await page.$('button[aria-label*="Download" i], button[aria-label*="download" i]');
+        if (dlBtn2 && await dlBtn2.isVisible().catch(() => false)) {
+          await dlBtn2.click({ force: true });
+        } else {
+          // Positional fallback: click download icon again
+          await page.evaluate(() => {
+            const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+            const headerBtns = btns.filter(b => {
+              const r = b.getBoundingClientRect();
+              return r.top < 100 && r.height < 50 && r.width < 50 && r.width > 10 && r.left > window.innerWidth * 0.55;
+            }).sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+            if (headerBtns.length >= 2) headerBtns[1].click();
+          });
+        }
+        await page.waitForTimeout(1000);
+
+        // Now click the 2K option (should be available now after upscale)
+        await page.evaluate(() => {
+          const allEls = Array.from(document.querySelectorAll('div, span, button, label, li, a, input'));
+          const opt2K = allEls.find(el => {
+            const t = el.textContent?.trim();
+            return (t === '2K' || t === '2k') && el.offsetParent !== null;
+          });
+          if (opt2K) opt2K.click();
+        });
+        await page.waitForTimeout(1000);
+      } else {
+        // No "Upscale" button found — maybe 2K is already upscaled
+        // Just click 2K directly
+        console.log(`   📐 No Upscale button — clicking 2K directly...`);
+        await page.evaluate(() => {
+          const allEls = Array.from(document.querySelectorAll('div, span, button, label, li, a, input'));
+          const opt2K = allEls.find(el => {
+            const t = el.textContent?.trim();
+            return (t === '2K' || t === '2k') && el.offsetParent !== null;
+          });
+          if (opt2K) opt2K.click();
+        });
+        await page.waitForTimeout(1000);
+      }
 
     } catch (e) {
       console.warn(`   ⚠️ Download click notice: ${e.message}`);
