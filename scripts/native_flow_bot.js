@@ -471,293 +471,272 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       }
     }
 
-    // 5. Click on the new card to enter Edit Mode (2x download is ONLY available in Edit Mode)
-    console.log(`   🖱️ Clicking card to enter Edit Mode for 2x download...`);
+    // 5. Enter Edit Mode by clicking the newly generated image card
+    console.log(`   🖱️ Entering Edit Mode for 2K Upscaled download...`);
 
-    try {
-      // Find and click the newest image card to open Edit Mode
-      const allImgs = await page.$$('img');
-      if (allImgs.length > 0) {
-        const lastImg = allImgs[allImgs.length - 1];
-        await lastImg.click({ force: true });
-        await page.waitForTimeout(3000);
-      }
-    } catch (e) {}
-
-    // Wait for Edit Mode to load (URL changes to /edit/ or page shows "What do you want to change?")
-    let inEditMode = false;
-    for (let w = 0; w < 8; w++) {
+    let enteredEdit = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
       if (page.url().includes('/edit/')) {
-        inEditMode = true;
+        enteredEdit = true;
         break;
       }
-      // Also check for edit-mode UI elements
-      const hasEditUI = await page.evaluate(() => {
-        const els = Array.from(document.querySelectorAll('input, div, textarea'));
-        return els.some(el => {
-          const ph = el.getAttribute('placeholder')?.toLowerCase() || '';
-          return ph.includes('change') || ph.includes('edit');
-        });
-      });
-      if (hasEditUI) { inEditMode = true; break; }
-      await page.waitForTimeout(500);
-    }
 
-    if (!inEditMode) {
-      // Try double-clicking card
-      console.log(`   ⚠️ Edit mode not detected, trying double-click...`);
-      const allImgs2 = await page.$$('img');
-      if (allImgs2.length > 0) {
-        await allImgs2[allImgs2.length - 1].dblclick({ force: true }).catch(() => {});
-        await page.waitForTimeout(3000);
-      }
-    }
-
-    // 6. Inside Edit Mode: Click Download (↓) button in top-right toolbar
-    console.log(`   🔍 Clicking Download (↓) icon in Edit Mode toolbar...`);
-
-    // Set up download event listener
-    const downloadPromise = page.waitForEvent('download', { timeout: 20000 }).catch(() => null);
-
-    try {
-      // ===== STEP A: Click the Download (↓) icon button in the top-right toolbar =====
-      // From screenshot: top-right has heart, DOWNLOAD(↓), delete, share, "Hide history", "Done"
-      // The download icon is a small button with a downward arrow SVG
-
-      let dlClicked = false;
-
-      // Method 1: aria-label
-      const dlBtn = await page.$('button[aria-label*="Download" i], button[aria-label*="download" i]');
-      if (dlBtn && await dlBtn.isVisible().catch(() => false)) {
-        await dlBtn.click({ force: true });
-        dlClicked = true;
-      }
-
-      // Method 2: Find by position — download is the 3rd icon from right in the header
-      // (from right: Done, Hide history, share, delete, DOWNLOAD, heart)
-      if (!dlClicked) {
-        dlClicked = await page.evaluate(() => {
-          const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
-          // Filter buttons in the top header bar (y < 100)
-          const headerBtns = btns.filter(b => {
-            const r = b.getBoundingClientRect();
-            return r.top < 100 && r.height < 50 && r.width < 50 && r.width > 10;
-          }).sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-
-          // The download button has a downward arrow SVG icon
-          // Check each header button for download-like SVG
-          for (const btn of headerBtns) {
-            const svg = btn.querySelector('svg');
-            if (svg) {
-              const paths = svg.querySelectorAll('path');
-              const aria = btn.getAttribute('aria-label')?.toLowerCase() || '';
-              // Download arrows typically have paths pointing downward
-              if (aria.includes('download') || aria.includes('save')) {
-                btn.click();
-                return true;
-              }
-            }
-          }
-
-          // Fallback: download is typically after the heart/favorite icon
-          // Look for the icon sequence in the top bar
-          const iconBtns = headerBtns.filter(b => {
-            const r = b.getBoundingClientRect();
-            return r.left > window.innerWidth * 0.55;
-          });
-          // Download icon is usually the 2nd one (heart=1st, download=2nd)
-          if (iconBtns.length >= 2) {
-            iconBtns[1].click();
-            return true;
-          }
-          return false;
-        });
-      }
-
-      if (dlClicked) {
-        console.log(`   ✅ Download dropdown opened!`);
-      } else {
-        console.log(`   ⚠️ Could not find Download icon, trying keyboard shortcut...`);
-      }
-
-      await page.waitForTimeout(1000);
-
-      // ===== STEP B: In the dropdown, click "2K" then "Upscale" button =====
-      // From screenshot: dropdown shows:
-      //   "1K  Original size"  (radio)
-      //   "1K"  (selected)
-      //   "2K"  [Upscale]     ← we want THIS
-      //   "4K"  [Upgrade]
-      //   "Upscaled"
-
-      console.log(`   📐 Selecting 2K resolution and clicking Upscale...`);
-
-      // First, click "2K" label/radio to select it
+      // Try clicking the card / node or newest image
       await page.evaluate(() => {
-        const allEls = Array.from(document.querySelectorAll('div, span, button, label, li, a, input'));
-
-        // Click the "2K" text/radio option
-        const opt2K = allEls.find(el => {
-          const t = el.textContent?.trim();
-          return (t === '2K' || t === '2k') && el.offsetParent !== null;
+        const nodes = Array.from(document.querySelectorAll('div[class*="react-flow__node"], div[class*="nodeWrapper"], div[class*="card"], div[class*="node"]'));
+        const imgs = Array.from(document.querySelectorAll('img')).filter(i => {
+          const s = i.src || '';
+          return s.includes('googleusercontent.com') || s.startsWith('blob:');
         });
-        if (opt2K) {
-          opt2K.click();
+
+        const target = nodes[nodes.length - 1] || imgs[imgs.length - 1];
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
         }
       });
-      await page.waitForTimeout(500);
 
-      // Then click the "Upscale" button next to 2K
-      const upscaleFound = await page.evaluate(() => {
-        const allEls = Array.from(document.querySelectorAll('button, div, span, a'));
-        const upscaleBtn = allEls.find(el => {
-          const t = el.textContent?.trim().toLowerCase();
-          return (t === 'upscale' || t === 'upscaled') && el.offsetParent !== null;
+      await page.waitForTimeout(2000);
+
+      // Check if Edit Mode opened (URL contains /edit/ or Done button is present)
+      enteredEdit = await page.evaluate(() => {
+        return window.location.href.includes('/edit/') || !!document.querySelector('button:has-text("Done")') || Array.from(document.querySelectorAll('button')).some(b => b.textContent?.trim() === 'Done');
+      });
+
+      if (enteredEdit) break;
+
+      // Double-click fallback
+      const imgHandles = await page.$$('img');
+      if (imgHandles.length > 0) {
+        await imgHandles[imgHandles.length - 1].dblclick({ force: true }).catch(() => {});
+        await page.waitForTimeout(2500);
+      }
+    }
+
+    // Wait for Edit Mode UI to settle
+    await page.waitForTimeout(2000);
+    console.log(`   🎨 In Edit Mode: ${page.url()}`);
+
+    // 6. Set up download listener (up to 45s for 2K upscale generation + download)
+    const downloadPromise = page.waitForEvent('download', { timeout: 45000 }).catch(() => null);
+
+    // 7. Click Download (↓) icon in the top-right header toolbar
+    console.log(`   🔍 Finding & clicking Download (↓) icon in top toolbar...`);
+    let dropdownOpened = false;
+
+    for (let tryDl = 0; tryDl < 3; tryDl++) {
+      dropdownOpened = await page.evaluate(() => {
+        const allBtns = Array.from(document.querySelectorAll('button, [role="button"]'));
+        
+        // Strategy 1: Find button with aria-label containing download or save
+        const dlByAria = allBtns.find(b => {
+          const aria = b.getAttribute('aria-label')?.toLowerCase() || '';
+          return (aria.includes('download') || aria.includes('save')) && b.offsetParent !== null;
         });
-        if (upscaleBtn) {
-          upscaleBtn.click();
+        if (dlByAria) {
+          dlByAria.click();
           return true;
         }
+
+        // Strategy 2: Find button with download SVG icon in top header (y < 100)
+        const headerBtns = allBtns.filter(b => {
+          const r = b.getBoundingClientRect();
+          return r.top < 100 && r.height > 15 && r.height < 60 && r.left > window.innerWidth * 0.5;
+        }).sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+
+        for (const btn of headerBtns) {
+          const svg = btn.querySelector('svg');
+          if (svg) {
+            const pathData = Array.from(svg.querySelectorAll('path')).map(p => p.getAttribute('d') || '').join(' ');
+            // Common download icon path features (down arrow into tray)
+            if (pathData.includes('M19') || pathData.includes('v-2') || pathData.includes('19 9') || pathData.includes('12 16') || pathData.includes('12 17')) {
+              btn.click();
+              return true;
+            }
+          }
+        }
+
+        // Strategy 3: Positional relative to Done button or icon sequence
+        // In top right: [Heart] [Download] [Trash] [Share] [Hide history] [Done]
+        // Download is usually the 2nd icon button from the left of that group
+        const smallIconBtns = headerBtns.filter(b => {
+          const r = b.getBoundingClientRect();
+          return r.width < 50; // exclude text buttons like Done, Hide history
+        });
+
+        if (smallIconBtns.length >= 2) {
+          // Click the 2nd icon (Download)
+          smallIconBtns[1].click();
+          return true;
+        } else if (smallIconBtns.length === 1) {
+          smallIconBtns[0].click();
+          return true;
+        }
+
         return false;
       });
 
-      if (upscaleFound) {
-        // Wait for upscale processing to finish (can take 5-10 seconds)
-        console.log(`   ⏳ Waiting for 2K upscale to complete...`);
-        await page.waitForTimeout(10000);
-
-        // Take diagnostic screenshot after upscale
-        try {
-          await page.screenshot({ path: path.join(CONFIG.downloadDir, '_debug_after_upscale.png') });
-        } catch (e) {}
-
-        // After upscale completes, re-open download dropdown
-        console.log(`   🔍 Re-opening Download dropdown to download 2K file...`);
-        const dlBtn2 = await page.$('button[aria-label*="Download" i], button[aria-label*="download" i]');
-        if (dlBtn2 && await dlBtn2.isVisible().catch(() => false)) {
-          await dlBtn2.click({ force: true });
-        } else {
-          // Positional fallback: click download icon again
-          await page.evaluate(() => {
-            const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
-            const headerBtns = btns.filter(b => {
-              const r = b.getBoundingClientRect();
-              return r.top < 100 && r.height < 50 && r.width < 50 && r.width > 10 && r.left > window.innerWidth * 0.55;
-            }).sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
-            if (headerBtns.length >= 2) headerBtns[1].click();
-          });
-        }
-        await page.waitForTimeout(1000);
-
-        // Now click the 2K option (should be available now after upscale)
-        await page.evaluate(() => {
-          const allEls = Array.from(document.querySelectorAll('div, span, button, label, li, a, input'));
-          const opt2K = allEls.find(el => {
-            const t = el.textContent?.trim();
-            return (t === '2K' || t === '2k') && el.offsetParent !== null;
-          });
-          if (opt2K) opt2K.click();
-        });
-        await page.waitForTimeout(1000);
-      } else {
-        // No "Upscale" button found — maybe 2K is already upscaled
-        // Just click 2K directly
-        console.log(`   📐 No Upscale button — clicking 2K directly...`);
-        await page.evaluate(() => {
-          const allEls = Array.from(document.querySelectorAll('div, span, button, label, li, a, input'));
-          const opt2K = allEls.find(el => {
-            const t = el.textContent?.trim();
-            return (t === '2K' || t === '2k') && el.offsetParent !== null;
-          });
-          if (opt2K) opt2K.click();
-        });
-        await page.waitForTimeout(1000);
+      if (dropdownOpened) {
+        console.log(`   ✅ Clicked Download (↓) icon!`);
+        break;
       }
-
-    } catch (e) {
-      console.warn(`   ⚠️ Download click notice: ${e.message}`);
+      await page.waitForTimeout(1000);
     }
 
-    // Wait for download event
+    // Wait for the resolution dropdown to be visible
+    await page.waitForTimeout(1200);
+
+    // 8. In the dropdown popup: Click "2K" / "Upscaled"
+    console.log(`   📐 Selecting "2K" Upscaled option from dropdown...`);
+
+    const option2KClicked = await page.evaluate(() => {
+      const allEls = Array.from(document.querySelectorAll('div, span, button, label, li, a, p'));
+
+      // Look for element that has "2K" text in the resolution popup
+      // Popup contains: "1K Original size", "2K Upscaled" / "2K Upscale", "4K Upscaled Upgrade"
+      const opt2K = allEls.find(el => {
+        const text = el.textContent?.trim() || '';
+        // Match 2K row (must have 2K or 2k, but NOT 4K and NOT 1K)
+        const is2K = (text.includes('2K') || text.includes('2k') || text.includes('2x') || text.includes('2X')) &&
+                     !text.includes('4K') && !text.includes('1K') && !text.includes('Upgrade');
+        return is2K && el.offsetParent !== null;
+      });
+
+      if (opt2K) {
+        // Try clicking the row or any button inside it
+        const btnInside = opt2K.querySelector('button') || opt2K;
+        btnInside.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        return true;
+      }
+
+      // Fallback: look for "Upscale" button directly inside dropdown
+      const upscaleBtn = allEls.find(el => {
+        const t = el.textContent?.trim().toLowerCase() || '';
+        return (t === 'upscale' || t === 'upscaled' || t.includes('upscale')) && !t.includes('upgrade') && el.offsetParent !== null;
+      });
+      if (upscaleBtn) {
+        upscaleBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        return true;
+      }
+
+      return false;
+    });
+
+    if (option2KClicked) {
+      console.log(`   ⏳ "2K" selected! Waiting for 2K Upscaling & Download generation...`);
+    } else {
+      console.log(`   ⚠️ 2K option element not found directly, waiting for download event...`);
+    }
+
+    // 9. Wait for the 2K Upscale processing + Browser Download
+    // Upscaling takes some time (5-20s), then browser downloads the 2K file
+    console.log(`   ⏳ Waiting for 2K upscale processing to complete and download to finish...`);
+
+    let downloadSuccess = false;
     const download = await downloadPromise;
+
     if (download) {
       try {
         await download.saveAs(targetPath);
         if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
-          console.log(`   ✅ 2x Download Saved: ${targetPath} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
-          // Go back to Main Canvas
-          await exitEditMode(page);
-          return true;
+          const fileSizeKB = Math.round(fs.statSync(targetPath).size / 1024);
+          console.log(`   🎉 ✅ 2K Upscaled File Successfully Downloaded: ${targetPath} (${fileSizeKB} KB)`);
+          downloadSuccess = true;
         }
-      } catch (e) {}
+      } catch (e) {
+        console.warn(`   ⚠️ Download save notice: ${e.message}`);
+      }
     }
 
-    // 7. Fallback: Extract high-res 2K image from browser memory
-    console.log(`   🔄 Fallback: Extracting 2K image from browser...`);
-    try {
-      const base64Data = await page.evaluate(async (targetSrc) => {
-        const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
-          const src = img.currentSrc || img.src || '';
-          return src.includes('googleusercontent.com') || src.startsWith('blob:') || src.startsWith('data:') || src.includes('labs.google');
+    // If download didn't trigger automatically after upscale, re-check dropdown or click 2K again
+    if (!downloadSuccess) {
+      console.log(`   🔄 Checking if 2K download needs confirmation click...`);
+      await page.waitForTimeout(5000);
+
+      // Re-click 2K if ready
+      await page.evaluate(() => {
+        const allEls = Array.from(document.querySelectorAll('div, span, button, label, li, a'));
+        const opt2K = allEls.find(el => {
+          const text = el.textContent?.trim() || '';
+          return (text.includes('2K') || text.includes('2k')) && !text.includes('4K') && !text.includes('1K') && el.offsetParent !== null;
         });
+        if (opt2K) opt2K.click();
+      });
 
-        // In edit mode, the main large image is the one we want
-        const bigImg = imgs.reduce((best, img) => {
-          return (!best || (img.naturalWidth || 0) > (best.naturalWidth || 0)) ? img : best;
-        }, null);
+      await page.waitForTimeout(3000);
 
-        const targetImg = bigImg || (targetSrc ? imgs.find(i => (i.currentSrc || i.src) === targetSrc) : null) || imgs[imgs.length - 1];
-        if (targetImg) {
-          let url = targetImg.currentSrc || targetImg.src;
-          // Upgrade googleusercontent URL to max resolution
-          if (url.includes('googleusercontent.com')) {
-            url = url.replace(/=s\d+/g, '=s2048').replace(/=w\d+-h\d+/g, '=w2048-h2048');
-            if (!url.includes('=s') && !url.includes('=w')) {
-              url += (url.includes('?') ? '&' : '?') + '=s2048';
+      // Check if file was written to disk by Chrome default download
+      if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
+        downloadSuccess = true;
+      }
+    }
+
+    // 10. Fallback: High-Resolution 2K (2048x2048) extraction if needed
+    if (!downloadSuccess) {
+      console.log(`   🔄 Running 2K High-Res Buffer Extraction Fallback...`);
+      try {
+        const base64Data = await page.evaluate(async (targetSrc) => {
+          const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
+            const src = img.currentSrc || img.src || '';
+            return src.includes('googleusercontent.com') || src.startsWith('blob:') || src.startsWith('data:') || src.includes('labs.google');
+          });
+
+          // In edit mode, find largest image
+          const bigImg = imgs.reduce((best, img) => {
+            return (!best || (img.naturalWidth || 0) > (best.naturalWidth || 0)) ? img : best;
+          }, null);
+
+          const targetImg = bigImg || (targetSrc ? imgs.find(i => (i.currentSrc || i.src) === targetSrc) : null) || imgs[imgs.length - 1];
+          if (targetImg) {
+            let url = targetImg.currentSrc || targetImg.src;
+            if (url.includes('googleusercontent.com')) {
+              url = url.replace(/=s\d+/g, '=s2048').replace(/=w\d+-h\d+/g, '=w2048-h2048');
+              if (!url.includes('=s') && !url.includes('=w')) {
+                url += (url.includes('?') ? '&' : '?') + '=s2048';
+              }
+            }
+
+            try {
+              const res = await fetch(url);
+              const blob = await res.blob();
+              return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.readAsDataURL(blob);
+              });
+            } catch (e) {
+              const canvas = document.createElement('canvas');
+              canvas.width = 2048;
+              canvas.height = 2048;
+              const ctx = canvas.getContext('2d');
+              ctx.imageSmoothingEnabled = true;
+              ctx.imageSmoothingQuality = 'high';
+              ctx.drawImage(targetImg, 0, 0, 2048, 2048);
+              return canvas.toDataURL('image/jpeg', 0.98);
             }
           }
+          return null;
+        }, newImageSrc);
 
-          try {
-            const res = await fetch(url);
-            const blob = await res.blob();
-            return new Promise((resolve) => {
-              const reader = new FileReader();
-              reader.onloadend = () => resolve(reader.result);
-              reader.readAsDataURL(blob);
-            });
-          } catch (e) {
-            const canvas = document.createElement('canvas');
-            canvas.width = 2048;
-            canvas.height = 2048;
-            const ctx = canvas.getContext('2d');
-            ctx.imageSmoothingEnabled = true;
-            ctx.imageSmoothingQuality = 'high';
-            ctx.drawImage(targetImg, 0, 0, 2048, 2048);
-            return canvas.toDataURL('image/jpeg', 0.98);
+        if (base64Data && base64Data.includes('base64,')) {
+          const dataBuffer = Buffer.from(base64Data.split('base64,')[1], 'base64');
+          if (dataBuffer.length > 10240) {
+            fs.writeFileSync(targetPath, dataBuffer);
+            console.log(`   ✅ Saved 2K High-Res Image: ${targetPath} (${Math.round(dataBuffer.length / 1024)} KB)`);
+            downloadSuccess = true;
           }
         }
-        return null;
-      }, newImageSrc);
-
-      if (base64Data && base64Data.includes('base64,')) {
-        const dataBuffer = Buffer.from(base64Data.split('base64,')[1], 'base64');
-        if (dataBuffer.length > 10240) {
-          fs.writeFileSync(targetPath, dataBuffer);
-          console.log(`   ✅ Saved 2K High-Res Image: ${targetPath} (${Math.round(dataBuffer.length / 1024)} KB)`);
-          await exitEditMode(page);
-          return true;
-        }
+      } catch (extractErr) {
+        console.warn(`   ⚠️ Extraction notice: ${extractErr.message}`);
       }
-    } catch (extractErr) {
-      console.warn(`   ⚠️ Extraction notice: ${extractErr.message}`);
     }
 
-    // Go back to Main Canvas regardless
+    // 11. Click "Done" button to return to Main Canvas Grid
     await exitEditMode(page);
 
-    // Final verification on disk
+    // 12. Final verification on disk
     if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
-      console.log(`   ✅ Saved & Verified: ${targetPath}`);
+      console.log(`   ✅ Step Complete: ${fileName} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
       return true;
     }
 
@@ -776,15 +755,24 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
 async function exitEditMode(page) {
   if (!page.url().includes('/edit/')) return;
 
-  console.log(`   ↩️ Returning to Main Canvas Grid...`);
+  console.log(`   ↩️ Clicking "Done" button to return to Main Canvas Grid...`);
   try {
-    // Click "Done" button (top-right corner)
-    const doneBtn = await page.$('button:has-text("Done")');
-    if (doneBtn) {
-      await doneBtn.click({ force: true });
-      await page.waitForTimeout(2000);
-      if (!page.url().includes('/edit/')) return;
+    // Click "Done" button (top-right corner white button)
+    let doneClicked = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button, [role="button"]'));
+      const doneBtn = btns.find(b => b.textContent?.trim() === 'Done' && b.offsetParent !== null);
+      if (doneBtn) {
+        doneBtn.click();
+        return true;
+      }
+      return false;
+    });
+
+    if (doneClicked) {
+      await page.waitForTimeout(2500);
     }
+
+    if (!page.url().includes('/edit/')) return;
 
     // Click Back arrow (←) at top-left
     const backBtn = await page.$('button[aria-label*="Back" i], a[aria-label*="Back" i]');
@@ -794,12 +782,12 @@ async function exitEditMode(page) {
       if (!page.url().includes('/edit/')) return;
     }
 
-    // Navigate directly to main project URL
+    // Direct navigate fallback
     const mainUrl = page.url().split('/edit/')[0];
     await page.goto(mainUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(3000);
 
-    // Re-wait for editor
+    // Re-wait for Slate editor on main canvas
     await page.waitForSelector('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]', { timeout: 15000 }).catch(() => {});
   } catch (e) {
     console.warn(`   ⚠️ Exit edit mode notice: ${e.message}`);
