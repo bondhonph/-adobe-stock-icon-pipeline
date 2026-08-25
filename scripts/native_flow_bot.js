@@ -111,11 +111,11 @@ function sanitizeName(name) {
 }
 
 // ==============================================================================
-// MAIN AUTONOMOUS WORKFLOW (Strict 1-by-1 Generate -> Download Sequence)
+// MAIN AUTONOMOUS WORKFLOW (Main Infinite Canvas Grid Mode)
 // ==============================================================================
 async function runNativeAutoPilot() {
   console.log('================================================================');
-  console.log('🚀 100% UNATTENDED AUTONOMOUS FLOW BOT (Enhanced New Data Engine)');
+  console.log('🚀 100% UNATTENDED AUTONOMOUS FLOW BOT (Main Canvas Grid Mode)');
   console.log('================================================================');
   console.log(`📋 Total Topics Loaded: ${allTopics.length}`);
   console.log(`🎯 Processing Range: #${startId} to #${endId} (${targetTopics.length} Topics)`);
@@ -152,10 +152,10 @@ async function runNativeAutoPilot() {
   // Handle Google Sign-in if needed
   await handleGoogleSignIn(page);
 
-  // Enter Project Canvas
+  // Enter Project Main Canvas Grid
   await ensureProjectCanvas(page);
 
-  // Wait for Slate Editor
+  // Wait for Slate Editor on Main Canvas
   await waitForSlateEditor(page);
 
   // Loop through target topics
@@ -179,10 +179,10 @@ async function runNativeAutoPilot() {
 
     const { lineArt, solid } = generatePrompts(item.topic);
 
-    // STEP 1: Generate Line Art -> Immediately Download & Save Line Art
+    // STEP 1: Generate Line Art on Main Canvas -> Save Line Art
     let lineArtSuccess = false;
     if (!fs.existsSync(lineArtTarget) || fs.statSync(lineArtTarget).size < 10240) {
-      console.log(`🎨 [1/2] Processing Line Art (Generate ➡️ Download)...`);
+      console.log(`🎨 [1/2] Processing Line Art (Main Canvas Grid)...`);
       lineArtSuccess = await executeFlowStepWithRetry(page, lineArt, 'Line Art', AUTO_DOWNLOAD_DIR, lineArtFileName);
     } else {
       console.log(`   ⏩ Line Art already exists on disk.`);
@@ -192,10 +192,10 @@ async function runNativeAutoPilot() {
     // Brief pause between images
     await page.waitForTimeout(2000);
 
-    // STEP 2: Generate Solid Fill -> Immediately Download & Save Solid Fill
+    // STEP 2: Generate Solid Fill on Main Canvas -> Save Solid Fill
     let solidSuccess = false;
     if (!fs.existsSync(solidTarget) || fs.statSync(solidTarget).size < 10240) {
-      console.log(`🎨 [2/2] Processing Solid Fill (Generate ➡️ Download)...`);
+      console.log(`🎨 [2/2] Processing Solid Fill (Main Canvas Grid)...`);
       solidSuccess = await executeFlowStepWithRetry(page, solid, 'Solid', AUTO_DOWNLOAD_DIR, solidFileName);
     } else {
       console.log(`   ⏩ Solid Fill already exists on disk.`);
@@ -217,7 +217,7 @@ async function runNativeAutoPilot() {
 }
 
 // ==============================================================================
-// NAVIGATION & PAGE STATE HANDLERS
+// NAVIGATION & PAGE STATE HANDLERS (Always stay on Main Canvas Grid)
 // ==============================================================================
 async function dismissOverlays(page) {
   try {
@@ -262,7 +262,27 @@ async function handleGoogleSignIn(page) {
   }
 }
 
+async function ensureMainCanvas(page) {
+  // If stuck inside an individual image edit sub-canvas (/edit/), exit back to main canvas
+  if (page.url().includes('/edit/')) {
+    console.log('↩️ Exiting image edit mode back to Main Canvas Grid...');
+    try {
+      const doneBtn = await page.$('button:has-text("Done"), button:has-text("Save"), button[aria-label*="Back" i]');
+      if (doneBtn) await doneBtn.click({ force: true }).catch(() => {});
+      await page.waitForTimeout(1500);
+    } catch (e) {}
+
+    if (page.url().includes('/edit/')) {
+      const mainProjUrl = page.url().split('/edit/')[0];
+      await page.goto(mainProjUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+      await page.waitForTimeout(3000);
+    }
+  }
+}
+
 async function ensureProjectCanvas(page) {
+  await ensureMainCanvas(page);
+
   if (page.url().includes('/project/')) return;
 
   console.log('📁 Opening project canvas from dashboard...');
@@ -280,7 +300,8 @@ async function ensureProjectCanvas(page) {
 }
 
 async function waitForSlateEditor(page) {
-  console.log('⏳ Waiting for Slate.js prompt editor...');
+  await ensureMainCanvas(page);
+  console.log('⏳ Waiting for Slate.js prompt editor on Main Canvas...');
   try {
     await page.waitForSelector('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]', { timeout: 35000 });
     console.log('✅ Slate Prompt Editor Ready! Starting Autonomous Generation Loop...\n');
@@ -293,7 +314,7 @@ async function waitForSlateEditor(page) {
 }
 
 // ==============================================================================
-// STEP-BY-STEP PROMPT GENERATION & IMMEDIATE DOWNLOAD (With Retry)
+// STEP-BY-STEP PROMPT GENERATION & BUFFER EXTRACTION (Main Grid Mode)
 // ==============================================================================
 async function executeFlowStepWithRetry(page, promptText, styleType, destDir, fileName) {
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -313,22 +334,25 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
   try {
     if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
 
+    // Ensure we are on the MAIN project canvas grid (NOT inside /edit/ sub-canvas)
+    await ensureMainCanvas(page);
+
     // 1. Snapshot all existing image src URLs BEFORE submitting new prompt
     const initialImgSrcs = await page.evaluate(() => {
       return Array.from(document.querySelectorAll('img')).map(img => img.currentSrc || img.src).filter(Boolean);
     });
 
-    // 2. Focus & Clear Slate Editor
+    // 2. Focus & Clear Slate Editor on Main Canvas
     const editor = await page.$('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]');
     if (!editor) {
-      console.log('❌ Could not find prompt editor');
+      console.log('❌ Could not find prompt editor on main canvas');
       return false;
     }
 
     await editor.click();
     await page.waitForTimeout(200);
 
-    // Clear editor via DOM and keyboard
+    // Clear editor cleanly
     await page.evaluate(() => {
       const el = document.querySelector('div[data-slate-editor="true"], div[role="textbox"], [contenteditable="true"]');
       if (el) {
@@ -372,7 +396,7 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     }
 
     // 3. Submit Prompt (Click Submit Arrow & Press Enter)
-    console.log(`   🚀 Submitting ${styleType} prompt to Google Flow...`);
+    console.log(`   🚀 Submitting ${styleType} prompt to Main Canvas Grid...`);
     
     // Click submit button (Arrow near bottom-right)
     await page.evaluate(() => {
@@ -401,8 +425,8 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     await page.keyboard.press('Enter');
     await page.waitForTimeout(1000);
 
-    // 4. Actively Monitor for the NEW UNIQUE Image to appear and finish rendering
-    console.log(`   ⏳ Monitoring canvas for NEW ${styleType} image (waiting for fresh render)...`);
+    // 4. Actively Monitor for the NEW UNIQUE Image to render on the Main Canvas Grid
+    console.log(`   ⏳ Monitoring Main Canvas Grid for NEW ${styleType} card (waiting for fresh render)...`);
     let newImageSrc = null;
     const startTime = Date.now();
     const maxWaitMs = 65000;
@@ -439,7 +463,7 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
         stableCount++;
         if (stableCount >= 2) {
           newImageSrc = check.src;
-          console.log(`   ✨ NEW ${styleType} image rendered (${check.width}x${check.height})!`);
+          console.log(`   ✨ NEW ${styleType} card rendered on Main Canvas (${check.width}x${check.height})!`);
           break;
         }
       } else {
@@ -447,50 +471,8 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       }
     }
 
-    // 5. Trigger 2x Upscale & Download
-    console.log(`   💾 Downloading & saving ${styleType} image...`);
-    
-    // Set up download event listener
-    const downloadPromise = page.waitForEvent('download', { timeout: 6000 }).catch(() => null);
-
-    // Try UI 2x / Download buttons
-    try {
-      const cards = await page.$$('div[class*="node"], div[class*="card"], img, canvas');
-      if (cards.length > 0) {
-        const latestCard = cards[cards.length - 1];
-        await latestCard.hover({ force: true, timeout: 1000 }).catch(() => {});
-        await latestCard.click({ force: true, timeout: 1000 }).catch(() => {});
-        await page.waitForTimeout(300);
-
-        const menuBtn = await latestCard.$('button');
-        if (menuBtn) {
-          await menuBtn.click({ force: true, timeout: 1000 }).catch(() => {});
-          await page.waitForTimeout(400);
-
-          await page.evaluate(() => {
-            const items = Array.from(document.querySelectorAll('div, span, button, li, a'));
-            const dl = items.find(el => el.textContent?.trim().toLowerCase() === 'download');
-            if (dl) dl.click();
-            const it2x = items.find(el => el.textContent?.trim().includes('2x') || el.textContent?.trim().includes('2X') || el.textContent?.trim().includes('Upscale'));
-            if (it2x) it2x.click();
-          }).catch(() => {});
-        }
-      }
-    } catch (e) {}
-
-    const download = await downloadPromise;
-    if (download) {
-      try {
-        await download.saveAs(targetPath);
-        if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
-          console.log(`   ✅ Saved via Download Event: ${targetPath} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
-          return true;
-        }
-      } catch (e) {}
-    }
-
-    // 6. Direct Extraction of the SPECIFIC NEW IMAGE from browser memory
-    console.log(`   🔄 Extracting High-Res Image Buffer from Canvas...`);
+    // 5. Extract & Save the New Image Directly from the Canvas (Zero UI disruption)
+    console.log(`   💾 Saving high-resolution image to Auto-Download folder...`);
     try {
       const base64Data = await page.evaluate(async (targetSrc) => {
         const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
@@ -532,7 +514,7 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       console.warn(`   ⚠️ Extraction notice: ${extractErr.message}`);
     }
 
-    // Final check
+    // Final verification on disk
     if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
       console.log(`   ✅ Saved & Verified: ${targetPath}`);
       return true;
