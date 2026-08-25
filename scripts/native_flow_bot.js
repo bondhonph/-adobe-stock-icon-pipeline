@@ -350,17 +350,24 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     // 3. Trigger Download: Click 3-dot Menu (⋮) -> Click Download -> Click 2x
     console.log(`   💾 Accessing image options (Looking for 3-dot menu ⋮)...`);
     
-    // Set up download event listener BEFORE clicking menu items
-    const downloadPromise = page.waitForEvent('download', { timeout: 35000 }).catch(() => null);
+    // Auto-remove notification toasts that intercept pointer events
+    await page.evaluate(() => {
+      document.querySelectorAll('section[aria-label*="Notifications" i], div[class*="toast"], div[class*="hemBBc"]').forEach(el => el.remove());
+    }).catch(() => {});
 
-    // Hover over the newest image card on canvas to reveal toolbar/menu buttons
-    const cards = await page.$$('div[class*="node"], div[class*="card"], img, canvas');
-    if (cards.length > 0) {
-      const latestCard = cards[cards.length - 1];
-      await latestCard.hover();
-      await latestCard.click(); // ensure selected
-      await page.waitForTimeout(600);
-    }
+    // Set up download event listener BEFORE clicking menu items
+    const downloadPromise = page.waitForEvent('download', { timeout: 12000 }).catch(() => null);
+
+    // Hover over the newest image card on canvas with forced pointer event
+    try {
+      const cards = await page.$$('div[class*="node"], div[class*="card"], img, canvas');
+      if (cards.length > 0) {
+        const latestCard = cards[cards.length - 1];
+        await latestCard.hover({ force: true, timeout: 2500 }).catch(() => {});
+        await latestCard.click({ force: true, timeout: 2500 }).catch(() => {});
+        await page.waitForTimeout(400);
+      }
+    } catch (e) {}
 
     // Step A: Find and click the 3-dot button (⋮ / ... / More options) or Download button
     const menuBtnSelectors = [
@@ -381,9 +388,9 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
         for (const btn of buttons) {
           if (await btn.isVisible()) {
             console.log(`   📌 Clicking image menu button (${sel})...`);
-            await btn.click({ force: true });
+            await btn.click({ force: true, timeout: 2500 }).catch(() => {});
             menuOpened = true;
-            await page.waitForTimeout(800);
+            await page.waitForTimeout(600);
             break;
           }
         }
@@ -407,9 +414,9 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
         const item = await page.$(sel);
         if (item && await item.isVisible()) {
           console.log(`   📌 Clicked "Download" menu item!`);
-          await item.hover();
-          await item.click({ force: true });
-          await page.waitForTimeout(800);
+          await item.hover({ force: true, timeout: 2000 }).catch(() => {});
+          await item.click({ force: true, timeout: 2000 }).catch(() => {});
+          await page.waitForTimeout(600);
           break;
         }
       } catch (e) {}
@@ -435,7 +442,7 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
         const el = await page.$(sel);
         if (el && await el.isVisible()) {
           console.log(`   ✨ Clicked "2x" option (${sel})!`);
-          await el.click({ force: true });
+          await el.click({ force: true, timeout: 2500 }).catch(() => {});
           twoXClicked = true;
           break;
         }
