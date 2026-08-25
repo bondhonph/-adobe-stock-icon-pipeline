@@ -529,8 +529,8 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
 
     await page.waitForTimeout(2000);
 
-    // 6. Set up download listener BEFORE triggering upscale/download (60s timeout for 2K generation)
-    const downloadPromise = page.waitForEvent('download', { timeout: 60000 }).catch(() => null);
+    // 6. Set up download listener BEFORE triggering upscale/download (up to 5 minutes dynamic wait)
+    let downloadEventPromise = page.waitForEvent('download', { timeout: 300000 }).catch(() => null);
 
     // 7. Click Download (↓) icon in the top-right toolbar
     console.log(`   🔍 Finding & clicking Download (↓) icon in top toolbar...`);
@@ -561,16 +561,14 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
         const svg = btn.querySelector('svg');
         if (svg) {
           const r = btn.getBoundingClientRect();
-          // The download button is typically the 2nd small icon in the top right cluster
           return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
         }
       }
 
-      // 3. Positional fallback relative to Done button or top right
+      // 3. Positional fallback relative to Done button
       const doneBtn = allBtns.find(b => b.textContent?.trim() === 'Done');
       if (doneBtn) {
         const dr = doneBtn.getBoundingClientRect();
-        // Download icon is about 220px to the left of Done button
         return { x: dr.left - 220, y: dr.top + dr.height / 2 };
       }
 
@@ -620,7 +618,7 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     if (option2KCoords) {
       console.log(`   📍 Clicking 2K option at (${Math.round(option2KCoords.x)}, ${Math.round(option2KCoords.y)})...`);
       await page.mouse.click(option2KCoords.x, option2KCoords.y);
-      console.log(`   ⏳ "2K" selected! Waiting for 2K Upscaling & Download generation...`);
+      console.log(`   ⏳ "2K" clicked! Starting dynamic wait for upscale completion...`);
     } else {
       console.log(`   ⚠️ 2K option coordinates not found, dispatching DOM click...`);
       await page.evaluate(() => {
@@ -630,93 +628,144 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       });
     }
 
-    // 9. Wait for the 2K Upscale processing + Browser Download
-    console.log(`   ⏳ Upscaling in progress (waiting up to 60s for full 2K file download)...`);
+    // 9. DYNAMIC WAIT: Wait as long as upscaling takes (no fixed timeout)
+    console.log(`   ⏳ 2K Upscaling in progress — waiting dynamically until 100% complete...`);
 
     let downloadSuccess = false;
-    const download = await downloadPromise;
+    const upscaleStartTime = Date.now();
+    let isProcessing = true;
 
-    if (download) {
-      try {
-        await download.saveAs(targetPath);
-        if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
-          const fileSizeKB = Math.round(fs.statSync(targetPath).size / 1024);
-          console.log(`   🎉 ✅ 2K Upscaled File Successfully Downloaded: ${targetPath} (${fileSizeKB} KB)`);
-          downloadSuccess = true;
+    // Race between download event and active progress polling
+    while (isProcessing) {
+      const elapsedSec = Math.round((Date.now() - upscaleStartTime) / 1000);
+
+      // Check if download resolved
+      const download = await Promise.race([
+        downloadEventPromise,
+        new Promise(resolve => setTimeout(() => resolve('WAITING'), 2500))
+      ]);
+
+      if (download && download !== 'WAITING') {
+        try {
+          await download.saveAs(targetPath);
+          if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
+            const fileSizeKB = Math.round(fs.statSync(targetPath).size / 1024);
+            console.log(`   🎉 ✅ 2K Upscaled File Successfully Downloaded in ${elapsedSec}s: ${targetPath} (${fileSizeKB} KB)`);
+            downloadSuccess = true;
+            break;
+          }
+        } catch (e) {
+          console.warn(`   ⚠️ Download save notice: ${e.message}`);
         }
-      } catch (e) {
-        console.warn(`   ⚠️ Download save notice: ${e.message}`);
+      }
+
+      // Check if file is already on disk
+      if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
+        console.log(`   🎉 ✅ Verified 2K File on disk (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
+        downloadSuccess = true;
+        break;
+      }
+
+      // Check if Google Flow is actively upscaling/loading
+      const stillUpscaling = await page.evaluate(() => {
+        const isSpinning = !!document.querySelector('div[class*="loading" i], div[class*="spinner" i], div[class*="progress" i], [aria-busy="true"], div[role="progressbar"]');
+        const hasUpscalingText = Array.from(document.querySelectorAll('*')).some(el => {
+          const t = el.textContent?.toLowerCase() || '';
+          return t.includes('upscaling') || t.includes('enhancing');
+        });
+        return isSpinning || hasUpscalingText;
+      });
+
+      if (stillUpscaling) {
+        process.stdout.write(`\r   ⏳ Upscaling in progress... (${elapsedSec}s elapsed)`);
+      } else if (elapsedSec > 15) {
+        // If upscaling spinner stopped after at least 15s, check if we need to click download again
+        const recheckDl = await downloadEventPromise;
+        if (recheckDl && recheckDl !== 'WAITING') {
+          try {
+            await recheckDl.saveAs(targetPath);
+            if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
+              downloadSuccess = true;
+              break;
+            }
+          } catch (e) {}
+        }
+        
+        // If still not downloaded, give it up to 60s of grace
+        if (elapsedSec > 60) {
+          isProcessing = false;
+        }
+      }
+
+      // Safety ceiling of 5 minutes
+      if (elapsedSec > 300) {
+        console.log('\n   ⚠️ Max 5 minutes reached, moving to fallback...');
+        break;
       }
     }
 
-    // If download didn't trigger automatically, wait additional 8s and check disk or re-click
-    if (!downloadSuccess) {
-      console.log(`   🔄 Checking if 2K download finished or needs re-click...`);
-      await page.waitForTimeout(8000);
+    console.log(''); // newline after status log
 
-      if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 10240) {
-        downloadSuccess = true;
-      } else {
-        // Direct buffer extraction fallback
-        console.log(`   🔄 Running 2K High-Res Buffer Extraction Fallback...`);
-        try {
-          const base64Data = await page.evaluate(async (targetSrc) => {
-            const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
-              const src = img.currentSrc || img.src || '';
-              return src.includes('googleusercontent.com') || src.startsWith('blob:') || src.startsWith('data:') || src.includes('labs.google');
-            });
+    // 10. Fallback: High-Resolution 2K Buffer Extraction if needed
+    if (!downloadSuccess && (!fs.existsSync(targetPath) || fs.statSync(targetPath).size <= 10240)) {
+      console.log(`   🔄 Running 2K High-Res Buffer Extraction Fallback...`);
+      try {
+        const base64Data = await page.evaluate(async (targetSrc) => {
+          const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
+            const src = img.currentSrc || img.src || '';
+            return src.includes('googleusercontent.com') || src.startsWith('blob:') || src.startsWith('data:') || src.includes('labs.google');
+          });
 
-            const bigImg = imgs.reduce((best, img) => {
-              return (!best || (img.naturalWidth || 0) > (best.naturalWidth || 0)) ? img : best;
-            }, null);
+          const bigImg = imgs.reduce((best, img) => {
+            return (!best || (img.naturalWidth || 0) > (best.naturalWidth || 0)) ? img : best;
+          }, null);
 
-            const targetImg = bigImg || (targetSrc ? imgs.find(i => (i.currentSrc || i.src) === targetSrc) : null) || imgs[imgs.length - 1];
-            if (targetImg) {
-              let url = targetImg.currentSrc || targetImg.src;
-              if (url.includes('googleusercontent.com')) {
-                url = url.replace(/=s\d+/g, '=s2048').replace(/=w\d+-h\d+/g, '=w2048-h2048');
-                if (!url.includes('=s') && !url.includes('=w')) {
-                  url += (url.includes('?') ? '&' : '?') + '=s2048';
-                }
-              }
-
-              try {
-                const res = await fetch(url);
-                const blob = await res.blob();
-                return new Promise((resolve) => {
-                  const reader = new FileReader();
-                  reader.onloadend = () => resolve(reader.result);
-                  reader.readAsDataURL(blob);
-                });
-              } catch (e) {
-                const canvas = document.createElement('canvas');
-                canvas.width = 2048;
-                canvas.height = 2048;
-                const ctx = canvas.getContext('2d');
-                ctx.imageSmoothingEnabled = true;
-                ctx.imageSmoothingQuality = 'high';
-                ctx.drawImage(targetImg, 0, 0, 2048, 2048);
-                return canvas.toDataURL('image/jpeg', 0.98);
+          const targetImg = bigImg || (targetSrc ? imgs.find(i => (i.currentSrc || i.src) === targetSrc) : null) || imgs[imgs.length - 1];
+          if (targetImg) {
+            let url = targetImg.currentSrc || targetImg.src;
+            if (url.includes('googleusercontent.com')) {
+              url = url.replace(/=s\d+/g, '=s2048').replace(/=w\d+-h\d+/g, '=w2048-h2048');
+              if (!url.includes('=s') && !url.includes('=w')) {
+                url += (url.includes('?') ? '&' : '?') + '=s2048';
               }
             }
-            return null;
-          }, newImageSrc);
 
-          if (base64Data && base64Data.includes('base64,')) {
-            const dataBuffer = Buffer.from(base64Data.split('base64,')[1], 'base64');
-            if (dataBuffer.length > 10240) {
-              fs.writeFileSync(targetPath, dataBuffer);
-              console.log(`   ✅ Saved 2K High-Res Image: ${targetPath} (${Math.round(dataBuffer.length / 1024)} KB)`);
-              downloadSuccess = true;
+            try {
+              const res = await fetch(url);
+              const blob = await res.blob();
+              return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.readAsDataURL(blob);
+              });
+            } catch (e) {
+              const canvas = document.createElement('canvas');
+              canvas.width = 2048;
+              canvas.height = 2048;
+              const ctx = canvas.getContext('2d');
+              ctx.imageSmoothingEnabled = true;
+              ctx.imageSmoothingQuality = 'high';
+              ctx.drawImage(targetImg, 0, 0, 2048, 2048);
+              return canvas.toDataURL('image/jpeg', 0.98);
             }
           }
-        } catch (extractErr) {
-          console.warn(`   ⚠️ Extraction notice: ${extractErr.message}`);
+          return null;
+        }, newImageSrc);
+
+        if (base64Data && base64Data.includes('base64,')) {
+          const dataBuffer = Buffer.from(base64Data.split('base64,')[1], 'base64');
+          if (dataBuffer.length > 10240) {
+            fs.writeFileSync(targetPath, dataBuffer);
+            console.log(`   ✅ Saved 2K High-Res Image: ${targetPath} (${Math.round(dataBuffer.length / 1024)} KB)`);
+            downloadSuccess = true;
+          }
         }
+      } catch (extractErr) {
+        console.warn(`   ⚠️ Extraction notice: ${extractErr.message}`);
       }
     }
 
-    // 10. Click "Done" button to return to Main Canvas Grid
+    // 11. Click "Done" button to return to Main Canvas Grid
     await exitEditMode(page);
 
     // 11. Final verification on disk
