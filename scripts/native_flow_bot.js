@@ -472,30 +472,81 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     }
 
     // 5. Trigger Official 2x Upscale & Download
-    console.log(`   🔍 Triggering Official 2x Upscale & Download...`);
+    console.log(`   🔍 Triggering 2x Upscale on Canvas...`);
     
-    // Set up download event listener (10s timeout)
-    const downloadPromise = page.waitForEvent('download', { timeout: 10000 }).catch(() => null);
+    // Set up download event listener (12s timeout)
+    const downloadPromise = page.waitForEvent('download', { timeout: 12000 }).catch(() => null);
 
-    // Hover over newest card and click 3-dot (⋮) -> Download -> 2x
+    // Hover over newest image/card and click Upscale / 2x
     try {
-      const cards = await page.$$('div[class*="node"], div[class*="card"], div[class*="image-container"], div[class*="nodeWrapper"]');
-      if (cards.length > 0) {
-        const latest = cards[cards.length - 1];
-        await latest.hover({ force: true, timeout: 1500 }).catch(() => {});
-        await page.waitForTimeout(400);
+      // Find all image elements and card containers
+      const cardHandles = await page.$$('div[class*="node"], div[class*="card"], div[class*="image-container"], div[class*="nodeWrapper"], div[class*="react-flow__node"]');
+      const imgHandles = await page.$$('img');
 
-        const menuBtn = await latest.$('button[aria-label*="more" i], button[aria-label*="options" i], button:has-text("⋮"), button:has(svg)');
-        if (menuBtn) {
-          await menuBtn.click({ force: true, timeout: 1500 }).catch(() => {});
-          await page.waitForTimeout(500);
+      const targetHandle = cardHandles[cardHandles.length - 1] || imgHandles[imgHandles.length - 1];
+
+      if (targetHandle) {
+        const box = await targetHandle.boundingBox();
+        if (box) {
+          // Move mouse physically over the card to trigger hover toolbar
+          await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+          await page.waitForTimeout(300);
+          await page.mouse.move(box.x + box.width - 20, box.y + 20);
+          await page.waitForTimeout(400);
         }
       }
 
-      // Step A: In any opened menu, look for "Download"
+      // Check 1: Direct Upscale / 2x button on card toolbar
+      const upscaleClicked = await page.evaluate(() => {
+        const allEls = Array.from(document.querySelectorAll('button, div, span, li, a'));
+        const uBtn = allEls.find(el => {
+          const t = el.textContent?.trim().toLowerCase();
+          const aria = el.getAttribute('aria-label')?.toLowerCase() || '';
+          return (t === '2x' || t === 'upscale' || t === 'enhance' || t === '2x upscale' || aria.includes('upscale') || aria.includes('2x') || aria.includes('enhance')) && el.offsetParent !== null;
+        });
+        if (uBtn) {
+          uBtn.click();
+          return true;
+        }
+        return false;
+      });
+
+      if (upscaleClicked) {
+        console.log(`   ✨ Clicked Upscale (2x) button!`);
+        await page.waitForTimeout(7000);
+      } else {
+        // Check 2: 3-dot Menu (⋮) on card
+        await page.evaluate(() => {
+          const btns = Array.from(document.querySelectorAll('button, [role="button"], div[class*="menu"], svg'));
+          const threeDots = btns.find(b => {
+            const aria = b.getAttribute('aria-label')?.toLowerCase() || '';
+            const t = b.textContent?.trim();
+            return (aria.includes('more') || aria.includes('options') || aria.includes('menu') || t === '⋮' || t === '...') && b.offsetParent !== null;
+          });
+          if (threeDots) threeDots.click();
+        });
+        await page.waitForTimeout(400);
+
+        // Look for Upscale or Download in menu
+        await page.evaluate(() => {
+          const items = Array.from(document.querySelectorAll('div[role="menuitem"], button, div, span, li, a'));
+          const up = items.find(el => {
+            const t = el.textContent?.trim().toLowerCase();
+            return t?.includes('upscale') || t?.includes('2x') || t?.includes('enhance');
+          });
+          if (up) up.click();
+        });
+        await page.waitForTimeout(1000);
+      }
+
+      // Step 3: Trigger Download
       await page.evaluate(() => {
         const items = Array.from(document.querySelectorAll('div[role="menuitem"], button, div, span, li, a'));
-        const dl = items.find(el => el.textContent?.trim().toLowerCase() === 'download' || el.getAttribute('aria-label')?.toLowerCase().includes('download'));
+        const dl = items.find(el => {
+          const t = el.textContent?.trim().toLowerCase();
+          const aria = el.getAttribute('aria-label')?.toLowerCase() || '';
+          return (t === 'download' || aria.includes('download') || el.querySelector('svg[data-icon="download" i]')) && el.offsetParent !== null;
+        });
         if (dl) {
           dl.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
           dl.click();
@@ -503,16 +554,14 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       });
       await page.waitForTimeout(500);
 
-      // Step B: In resolution menu/modal, look for "2x" or "Upscale"
+      // In resolution picker modal/menu, click 2x
       await page.evaluate(() => {
         const items = Array.from(document.querySelectorAll('div[role="menuitem"], button, div, span, li, a'));
         const opt2x = items.find(el => {
           const t = el.textContent?.trim();
-          return t === '2x' || t === '2X' || t?.includes('2x') || t?.includes('2X') || t?.toLowerCase().includes('upscale');
+          return (t === '2x' || t === '2X' || t?.includes('2x') || t?.includes('2X')) && el.offsetParent !== null;
         });
-        if (opt2x) {
-          opt2x.click();
-        }
+        if (opt2x) opt2x.click();
       });
     } catch (e) {}
 
