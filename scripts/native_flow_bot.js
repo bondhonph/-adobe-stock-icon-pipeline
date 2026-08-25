@@ -123,12 +123,26 @@ async function runNativeAutoPilot() {
   console.log(`🎯 Processing Range: #${startId} to #${endId} (${targetTopics.length} Topics)`);
   console.log(`📁 Unified Output Folder: ${AUTO_DOWNLOAD_DIR}\n`);
 
+  // Clean up any non-image temporary artifacts from Auto-Download
+  try {
+    if (fs.existsSync(AUTO_DOWNLOAD_DIR)) {
+      fs.readdirSync(AUTO_DOWNLOAD_DIR).forEach(f => {
+        if (!f.endsWith('.jpeg') && !f.endsWith('.jpg') && !f.endsWith('.png')) {
+          try { fs.unlinkSync(path.join(AUTO_DOWNLOAD_DIR, f)); } catch (e) {}
+        }
+      });
+    }
+  } catch (e) {}
+
+  const tempDownloadsPath = path.join(BOT_PROFILE_DIR, 'temp_downloads');
+  try { if (!fs.existsSync(tempDownloadsPath)) fs.mkdirSync(tempDownloadsPath, { recursive: true }); } catch (e) {}
+
   console.log('🌐 Launching Chrome dedicated automation browser...');
   const context = await chromium.launchPersistentContext(BOT_PROFILE_DIR, {
     headless: false,
     channel: 'chrome',
     acceptDownloads: true,
-    downloadsPath: AUTO_DOWNLOAD_DIR,
+    downloadsPath: tempDownloadsPath,
     args: [
       '--start-maximized',
       '--no-first-run',
