@@ -558,72 +558,81 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     await page.waitForTimeout(2000);
 
     // 6. Set up download listener BEFORE triggering upscale/download
-    let downloadEventPromise = page.waitForEvent('download', { timeout: 300000 }).catch(() => null);
+    let downloadEventPromise = page.waitForEvent('download', { timeout: 120000 }).catch(() => null);
 
     // 7. Locate and physically click the Download (↓) icon in the top-right toolbar
     console.log(`   🔍 Finding & clicking Download (↓) icon in top toolbar...`);
     let dropdownOpened = false;
-    let downloadButtonBox = null;
 
-    for (let tryDl = 1; tryDl <= 4; tryDl++) {
+    // Find the "Done" button first as the anchor point
+    const doneBtn = await page.$('button:has-text("Done")');
+    let doneBox = doneBtn ? await doneBtn.boundingBox() : null;
+
+    for (let tryDl = 1; tryDl <= 5; tryDl++) {
+      // Find all buttons in top bar (y < 80)
       const allBtns = await page.$$('button, [role="button"]');
       let dlHandle = null;
-      let dlBox = null;
+      let clickX = null;
+      let clickY = null;
 
-      // 1. Try finding by aria-label
+      // Strategy 1: Find button with aria-label or SVG download path
       for (const btn of allBtns) {
         const aria = await btn.getAttribute('aria-label');
         if (aria && (aria.toLowerCase().includes('download') || aria.toLowerCase().includes('save'))) {
           const b = await btn.boundingBox();
           if (b && b.y < 80) {
             dlHandle = btn;
-            dlBox = b;
+            clickX = b.x + b.width / 2;
+            clickY = b.y + b.height / 2;
             break;
           }
         }
       }
 
-      // 2. Try positional (icon cluster in top right: Heart, Download, Trash, Share)
-      if (!dlBox) {
-        const topIconBtns = [];
+      // Strategy 2: Position relative to Done button (Download is ~215px to left of Done)
+      if (!clickX && doneBox) {
+        // Collect all small icon buttons to the left of Done (x between doneBox.x - 300 and doneBox.x)
+        const iconBtns = [];
         for (const btn of allBtns) {
           const b = await btn.boundingBox();
-          if (b && b.y < 80 && b.width < 50 && b.width > 20 && b.x > 800) {
-            topIconBtns.push({ handle: btn, box: b });
+          if (b && b.y < 80 && b.width < 50 && b.width > 20 && b.x > doneBox.x - 300 && b.x < doneBox.x - 50) {
+            iconBtns.push({ handle: btn, box: b });
           }
         }
-        topIconBtns.sort((a, b) => a.box.x - b.box.x);
-        // Download is 2nd icon (index 1)
-        if (topIconBtns.length >= 2) {
-          dlHandle = topIconBtns[1].handle;
-          dlBox = topIconBtns[1].box;
-        } else if (topIconBtns.length === 1) {
-          dlHandle = topIconBtns[0].handle;
-          dlBox = topIconBtns[0].box;
+        iconBtns.sort((a, b) => a.box.x - b.box.x);
+        // Cluster: [0=Heart (~x-250), 1=Download (~x-215), 2=Trash (~x-180), 3=Share (~x-145)]
+        if (iconBtns.length >= 2) {
+          dlHandle = iconBtns[1].handle;
+          clickX = iconBtns[1].box.x + iconBtns[1].box.width / 2;
+          clickY = iconBtns[1].box.y + iconBtns[1].box.height / 2;
+        } else {
+          // Direct coordinate fallback based on Done button
+          clickX = doneBox.x - 215;
+          clickY = doneBox.y + doneBox.height / 2;
         }
       }
 
-      if (dlBox) {
-        downloadButtonBox = dlBox;
-        console.log(`   📍 Physical click on Download button at (${Math.round(dlBox.x + dlBox.width / 2)}, ${Math.round(dlBox.y + dlBox.height / 2)})...`);
-        await page.mouse.move(dlBox.x + dlBox.width / 2, dlBox.y + dlBox.height / 2);
-        await page.waitForTimeout(150);
-        await page.mouse.click(dlBox.x + dlBox.width / 2, dlBox.y + dlBox.height / 2);
+      if (clickX && clickY) {
+        console.log(`   📍 Clicking Download button at (${Math.round(clickX)}, ${Math.round(clickY)})...`);
+        await page.mouse.move(clickX, clickY);
+        await page.waitForTimeout(100);
+        await page.mouse.click(clickX, clickY);
         if (dlHandle) await dlHandle.click({ force: true }).catch(() => {});
-        await page.waitForTimeout(1500);
+        await page.waitForTimeout(1200);
 
-        // Verify dropdown is open
+        // Verify dropdown is open by checking for "Original size" or "1K" or "2K" or "Upscaled"
         dropdownOpened = await page.evaluate(() => {
           const bodyText = document.body?.innerText || '';
-          return bodyText.includes('Original size') || bodyText.includes('Upscaled') || bodyText.includes('1K') || bodyText.includes('2K');
+          return bodyText.includes('Original size') || bodyText.includes('Upscaled');
         });
 
         if (dropdownOpened) {
-          console.log(`   ✅ Download dropdown menu opened!`);
+          console.log(`   ✅ Download dropdown menu successfully opened!`);
           break;
         }
       }
-      await page.waitForTimeout(1000);
+
+      await page.waitForTimeout(800);
     }
 
     // 8. In the dropdown popup: Physically click "2K" / "Upscaled"
@@ -645,25 +654,18 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       if (opt2KHandle && opt2KHandle.asElement()) {
         const box = await opt2KHandle.asElement().boundingBox();
         if (box) {
-          console.log(`   📍 Physical click on 2K option at (${Math.round(box.x + box.width / 2)}, ${Math.round(box.y + box.height / 2)})...`);
+          console.log(`   📍 Clicking 2K option at (${Math.round(box.x + box.width / 2)}, ${Math.round(box.y + box.height / 2)})...`);
           await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-          await page.waitForTimeout(150);
+          await page.waitForTimeout(100);
           await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
           await opt2KHandle.asElement().click({ force: true }).catch(() => {});
           option2KClicked = true;
-          console.log(`   ⏳ "2K" option clicked! Upscaling started...`);
+          console.log(`   🚀 "2K" option clicked! Upscaling started...`);
           break;
         }
       }
 
-      // Positional fallback below Download button: 2K is ~110px below Download button
-      if (!option2KClicked && downloadButtonBox) {
-        console.log(`   📍 Positional click on 2K row below Download button...`);
-        await page.mouse.click(downloadButtonBox.x, downloadButtonBox.y + 110);
-        await page.waitForTimeout(1000);
-      }
-
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(800);
     }
 
     // 9. DYNAMIC WAIT: Wait as long as upscaling takes and capture downloaded file
