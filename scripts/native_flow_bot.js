@@ -29,7 +29,7 @@ if (fs.existsSync(TOPICS_FILE)) {
 // Parse Command Line Arguments (--start X --end Y)
 const args = process.argv.slice(2);
 let startId = 1;
-let endId = 50;
+let endId = 500;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--start' && args[i + 1]) startId = parseInt(args[i + 1], 10);
   if (args[i] === '--end' && args[i + 1]) endId = parseInt(args[i + 1], 10);
