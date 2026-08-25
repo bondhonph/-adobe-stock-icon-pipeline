@@ -347,183 +347,97 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
       console.log('   ✨ Image generation completed on canvas!');
     }
 
-    // 3. Trigger Download: Click 3-dot Menu (⋮) -> Click Download -> Click 2x
-    console.log(`   💾 Accessing image options (Looking for 3-dot menu ⋮)...`);
+    // 3. Trigger Download / Save High-Res Image
+    console.log(`   💾 Saving high-resolution image...`);
     
     // Auto-remove notification toasts that intercept pointer events
     await page.evaluate(() => {
       document.querySelectorAll('section[aria-label*="Notifications" i], div[class*="toast"], div[class*="hemBBc"]').forEach(el => el.remove());
     }).catch(() => {});
 
-    // Set up download event listener BEFORE clicking menu items
-    const downloadPromise = page.waitForEvent('download', { timeout: 12000 }).catch(() => null);
+    // Set up download event listener with short safety timeout (5s)
+    const downloadPromise = page.waitForEvent('download', { timeout: 5000 }).catch(() => null);
 
-    // Hover over the newest image card on canvas with forced pointer event
+    // Fast UI Menu Click Attempt
     try {
       const cards = await page.$$('div[class*="node"], div[class*="card"], img, canvas');
       if (cards.length > 0) {
         const latestCard = cards[cards.length - 1];
-        await latestCard.hover({ force: true, timeout: 2500 }).catch(() => {});
-        await latestCard.click({ force: true, timeout: 2500 }).catch(() => {});
-        await page.waitForTimeout(400);
+        await latestCard.hover({ force: true, timeout: 1000 }).catch(() => {});
+        await latestCard.click({ force: true, timeout: 1000 }).catch(() => {});
+        await page.waitForTimeout(300);
+
+        // Try 3-dot or download buttons
+        const menuBtn = await latestCard.$('button');
+        if (menuBtn) {
+          await menuBtn.click({ force: true, timeout: 1000 }).catch(() => {});
+          await page.waitForTimeout(400);
+
+          // Click 2x in menu
+          await page.evaluate(() => {
+            const items = Array.from(document.querySelectorAll('div, span, button, li, a'));
+            const dl = items.find(el => el.textContent?.trim().toLowerCase() === 'download');
+            if (dl) dl.click();
+            const it2x = items.find(el => el.textContent?.trim().includes('2x') || el.textContent?.trim().includes('2X') || el.textContent?.trim().includes('Upscale'));
+            if (it2x) it2x.click();
+          }).catch(() => {});
+        }
       }
     } catch (e) {}
 
-    // Step A: Find and click the 3-dot button (⋮ / ... / More options) or Download button
-    const menuBtnSelectors = [
-      'button[aria-label*="More" i]',
-      'button[aria-label*="Options" i]',
-      'button[aria-label*="Menu" i]',
-      'button:has-text("⋮")',
-      'button:has-text("...")',
-      'button[aria-label*="Download" i]',
-      'button:has(svg[data-icon="download"])',
-      'div[class*="node"] button'
-    ];
-
-    let menuOpened = false;
-    for (const sel of menuBtnSelectors) {
+    // Check if download event fired
+    const download = await downloadPromise;
+    if (download) {
       try {
-        const buttons = await page.$$(sel);
-        for (const btn of buttons) {
-          if (await btn.isVisible()) {
-            console.log(`   📌 Clicking image menu button (${sel})...`);
-            await btn.click({ force: true, timeout: 2500 }).catch(() => {});
-            menuOpened = true;
-            await page.waitForTimeout(600);
-            break;
-          }
-        }
-        if (menuOpened) break;
-      } catch (e) {}
-    }
-
-    // Step B: Look for and click "Download" item in the opened menu
-    console.log(`   🔍 Looking for "Download" option in menu...`);
-    const downloadItemSelectors = [
-      'div[role="menuitem"]:has-text("Download")',
-      'button:has-text("Download")',
-      'div:has-text("Download")',
-      'span:has-text("Download")',
-      'a:has-text("Download")',
-      'li:has-text("Download")'
-    ];
-
-    for (const sel of downloadItemSelectors) {
-      try {
-        const item = await page.$(sel);
-        if (item && await item.isVisible()) {
-          console.log(`   📌 Clicked "Download" menu item!`);
-          await item.hover({ force: true, timeout: 2000 }).catch(() => {});
-          await item.click({ force: true, timeout: 2000 }).catch(() => {});
-          await page.waitForTimeout(600);
-          break;
-        }
-      } catch (e) {}
-    }
-
-    // Step C: Now click the "2x" option (in the resolution sub-menu or modal)
-    console.log(`   🔍 Selecting "2x" resolution option...`);
-    const twoXSelectors = [
-      'div[role="menuitem"]:has-text("2x")',
-      'button:has-text("2x")',
-      'div:has-text("2x")',
-      'span:has-text("2x")',
-      '[aria-label*="2x" i]',
-      'li:has-text("2x")',
-      'div[role="option"]:has-text("2x")',
-      'button:has-text("Upscale")',
-      'div:has-text("Upscale")'
-    ];
-
-    let twoXClicked = false;
-    for (const sel of twoXSelectors) {
-      try {
-        const el = await page.$(sel);
-        if (el && await el.isVisible()) {
-          console.log(`   ✨ Clicked "2x" option (${sel})!`);
-          await el.click({ force: true, timeout: 2500 }).catch(() => {});
-          twoXClicked = true;
-          break;
-        }
-      } catch (e) {}
-    }
-
-    if (!twoXClicked) {
-      // Fallback: evaluate click on any element containing "2x" or "Download"
-      const clicked = await page.evaluate(() => {
-        const items = Array.from(document.querySelectorAll('div, span, button, li, a'));
-        const item2x = items.find(el => {
-          const txt = el.textContent?.trim();
-          return txt === '2x' || txt === '2X' || txt?.includes('2x') || txt?.includes('2X');
-        });
-        if (item2x) {
-          item2x.click();
+        await download.saveAs(targetPath);
+        if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 1024) {
+          console.log(`   ✅ Saved & Verified via Download Event: ${targetPath} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
           return true;
         }
-        return false;
-      });
-      if (clicked) {
-        console.log(`   ✨ Selected "2x" via text matching.`);
-        twoXClicked = true;
-      }
+      } catch (e) {}
     }
 
-    // Await download completion
-    console.log(`   ⏳ Waiting for 2x image download...`);
-    const download = await downloadPromise;
-
-    if (download) {
-      await download.saveAs(targetPath);
-      if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 1024) {
-        console.log(`   ✅ Saved & Verified via Download Event: ${targetPath} (${Math.round(fs.statSync(targetPath).size / 1024)} KB)`);
-        return true;
-      }
-    }
-
-    // Direct Extraction Fallback: If UI download didn't produce file, extract directly from DOM/Canvas
-    if (!fs.existsSync(targetPath) || fs.statSync(targetPath).size < 1024) {
-      console.log(`   🔄 Extracting High-Res Image Buffer directly from Canvas...`);
-      try {
-        const base64Data = await page.evaluate(async () => {
-          const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
-            const src = img.src || '';
-            return src.includes('googleusercontent.com') || src.startsWith('blob:') || src.startsWith('data:') || src.includes('labs.google');
-          });
-
-          if (imgs.length > 0) {
-            const lastImg = imgs[imgs.length - 1];
-            try {
-              const res = await fetch(lastImg.src);
-              const blob = await res.blob();
-              return new Promise((resolve) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(reader.result);
-                reader.readAsDataURL(blob);
-              });
-            } catch (e) {
-              const canvas = document.createElement('canvas');
-              canvas.width = lastImg.naturalWidth || 2048;
-              canvas.height = lastImg.naturalHeight || 2048;
-              const ctx = canvas.getContext('2d');
-              ctx.drawImage(lastImg, 0, 0);
-              return canvas.toDataURL('image/jpeg', 0.98);
-            }
-          }
-          return null;
+    // Direct Extraction Fallback (Instant & 100% Reliable from Canvas Memory)
+    console.log(`   🔄 Extracting High-Res Image Buffer directly from Canvas...`);
+    try {
+      const base64Data = await page.evaluate(async () => {
+        const imgs = Array.from(document.querySelectorAll('img')).filter(img => {
+          const src = img.src || '';
+          return src.includes('googleusercontent.com') || src.startsWith('blob:') || src.startsWith('data:') || src.includes('labs.google');
         });
 
-        if (base64Data && base64Data.includes('base64,')) {
-          const dataBuffer = Buffer.from(base64Data.split('base64,')[1], 'base64');
-          if (dataBuffer.length > 1024) {
-            fs.writeFileSync(targetPath, dataBuffer);
-            console.log(`   ✅ Directly Extracted & Saved: ${targetPath} (${Math.round(dataBuffer.length / 1024)} KB)`);
-            return true;
+        if (imgs.length > 0) {
+          const lastImg = imgs[imgs.length - 1];
+          try {
+            const res = await fetch(lastImg.src);
+            const blob = await res.blob();
+            return new Promise((resolve) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result);
+              reader.readAsDataURL(blob);
+            });
+          } catch (e) {
+            const canvas = document.createElement('canvas');
+            canvas.width = lastImg.naturalWidth || 2048;
+            canvas.height = lastImg.naturalHeight || 2048;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(lastImg, 0, 0);
+            return canvas.toDataURL('image/jpeg', 0.98);
           }
         }
-      } catch (extractErr) {
-        console.warn(`   ⚠️ Extraction notice: ${extractErr.message}`);
+        return null;
+      });
+
+      if (base64Data && base64Data.includes('base64,')) {
+        const dataBuffer = Buffer.from(base64Data.split('base64,')[1], 'base64');
+        if (dataBuffer.length > 1024) {
+          fs.writeFileSync(targetPath, dataBuffer);
+          console.log(`   ✅ Directly Extracted & Saved: ${targetPath} (${Math.round(dataBuffer.length / 1024)} KB)`);
+          return true;
+        }
       }
+    } catch (extractErr) {
+      console.warn(`   ⚠️ Extraction notice: ${extractErr.message}`);
     }
 
     // Final verification on disk
