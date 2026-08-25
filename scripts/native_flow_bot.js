@@ -865,9 +865,15 @@ async function processFlowGeneration(page, promptText, styleType, destDir, fileN
     }
 
     console.warn(`   ❌ File verification failed for ${fileName}`);
+    try {
+      await page.screenshot({ path: path.join(AUTO_DOWNLOAD_DIR, `_debug_failed_${styleType}.png`), fullPage: false });
+    } catch (e) {}
     return false;
   } catch (err) {
     console.error(`   ❌ Error processing ${styleType}:`, err.message);
+    try {
+      await page.screenshot({ path: path.join(AUTO_DOWNLOAD_DIR, `_debug_error_${styleType}.png`), fullPage: false });
+    } catch (e) {}
     await exitEditMode(page).catch(() => {});
     return false;
   }
