@@ -62,7 +62,18 @@ export const TemplateModal: React.FC<TemplateModalProps> = ({
     setActiveTemplateId(DEFAULT_PROMPT_TEMPLATES[0].id);
   };
 
-  const handleSaveAll = () => {
+  const handleSaveAll = async () => {
+    try {
+      await fetch('/api/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          activeTemplateId,
+          templates: localTemplates
+        })
+      });
+    } catch (e) {}
+
     onSaveTemplates(localTemplates);
     onSelectTemplate(activeTemplateId);
     setHasSaved(true);

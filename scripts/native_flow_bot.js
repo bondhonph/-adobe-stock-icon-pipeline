@@ -98,12 +98,30 @@ function recordTopicCompletion(topicId, topicName, lineArtFile, solidFile) {
 }
 
 // ==============================================================================
-// MASTER PROMPT GENERATOR (8x4 Grid, 32 Icons)
+// MASTER PROMPT GENERATOR (Supports Custom Prompts from data/custom_prompts.json)
 // ==============================================================================
-function generatePrompts(theme) {
-  const lineArt = `A clean, professional icon set featuring 32 line art icons based on the theme of ${theme}. The icons are arranged in a perfectly aligned grid layout (8 columns × 4 rows), with equal spacing between each icon. Each icon is centered within its own identical square bounding box, maintaining consistent padding, proportions and visual balance. Style: line art, minimal, modern, professional vector-style icons. Consistent medium stroke weight across all icons, with refined and clean line quality. Open lines, smooth curves, clean geometric construction and balanced negative space. Composition: pixel-perfect 8 × 4 grid system, mathematically equal spacing, consistent margins on all sides. Design rules: pure black outlines only, no color fills, no solid fills, no gradients, no shadows, no textures, no 3D effects. Background: pure white background, clean and isolated. Rendering: flat vector-style appearance, clean geometric shapes, crisp edges, minimal anchor complexity, optimized for scalability and easy vectorization. Quality: ultra sharp, high resolution, crisp lines, no distortion, professional commercial stock quality.`;
+const CUSTOM_PROMPTS_FILE = path.join(APP_DIR, 'data', 'custom_prompts.json');
 
-  const solid = `A clean, professional icon set featuring 32 solid filled icons based on the theme of ${theme}. The icons are arranged in a perfectly aligned grid layout (8 columns × 4 rows), with equal spacing between each icon. Each icon is centered within its own identical square bounding box, maintaining consistent padding, proportions and visual balance. Style: solid fill, bold, minimal, modern, professional vector-style icons. No outlines or strokes, only filled shapes. Smooth edges, clean geometric construction, consistent visual weight and strong silhouettes. Composition: pixel-perfect 8 × 4 grid system, mathematically equal spacing, consistent margins on all sides. Design rules: fully filled shapes, no stroke, no outline, no gradients, no shadows, no textures, no 3D effects. Background: pure white background, clean and isolated. Rendering: flat vector-style appearance, clean geometric shapes, crisp edges, minimal anchor complexity, optimized for scalability and easy vectorization. Quality: ultra sharp, high resolution, crisp edges, no distortion, professional commercial stock quality.`;
+function generatePrompts(theme) {
+  let lineArtTemplate = `A clean, professional icon set featuring 32 line art icons based on the theme of {{THEME}}. The icons are arranged in a perfectly aligned grid layout (8 columns × 4 rows), with equal spacing between each icon. Each icon is centered within its own identical square bounding box, maintaining consistent padding, proportions and visual balance. Style: line art, minimal, modern, professional vector-style icons. Consistent medium stroke weight across all icons, with refined and clean line quality. Open lines, smooth curves, clean geometric construction and balanced negative space. Composition: pixel-perfect 8 × 4 grid system, mathematically equal spacing, consistent margins on all sides. Design rules: pure black outlines only, no color fills, no solid fills, no gradients, no shadows, no textures, no 3D effects. Background: pure white background, clean and isolated. Rendering: flat vector-style appearance, clean geometric shapes, crisp edges, minimal anchor complexity, optimized for scalability and easy vectorization. Quality: ultra sharp, high resolution, crisp lines, no distortion, professional commercial stock quality.`;
+
+  let solidTemplate = `A clean, professional icon set featuring 32 solid filled icons based on the theme of {{THEME}}. The icons are arranged in a perfectly aligned grid layout (8 columns × 4 rows), with equal spacing between each icon. Each icon is centered within its own identical square bounding box, maintaining consistent padding, proportions and visual balance. Style: solid fill, bold, minimal, modern, professional vector-style icons. No outlines or strokes, only filled shapes. Smooth edges, clean geometric construction, consistent visual weight and strong silhouettes. Composition: pixel-perfect 8 × 4 grid system, mathematically equal spacing, consistent margins on all sides. Design rules: fully filled shapes, no stroke, no outline, no gradients, no shadows, no textures, no 3D effects. Background: pure white background, clean and isolated. Rendering: flat vector-style appearance, clean geometric shapes, crisp edges, minimal anchor complexity, optimized for scalability and easy vectorization. Quality: ultra sharp, high resolution, crisp edges, no distortion, professional commercial stock quality.`;
+
+  try {
+    if (fs.existsSync(CUSTOM_PROMPTS_FILE)) {
+      const config = JSON.parse(fs.readFileSync(CUSTOM_PROMPTS_FILE, 'utf-8'));
+      const activeTpl = (config.templates || []).find(t => t.id === config.activeTemplateId) || config.templates?.[0];
+      if (activeTpl) {
+        if (activeTpl.outlineTemplate) lineArtTemplate = activeTpl.outlineTemplate;
+        if (activeTpl.solidTemplate) solidTemplate = activeTpl.solidTemplate;
+      }
+    }
+  } catch (e) {
+    // Fallback to default
+  }
+
+  const lineArt = lineArtTemplate.replace(/\{\{THEME\}\}/gi, theme).replace(/\{\{topic\}\}/gi, theme);
+  const solid = solidTemplate.replace(/\{\{THEME\}\}/gi, theme).replace(/\{\{topic\}\}/gi, theme);
 
   return { lineArt, solid };
 }

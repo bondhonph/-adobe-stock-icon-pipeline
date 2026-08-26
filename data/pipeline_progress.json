@@ -1,4 +1,20 @@
 {
-  "completedTopicIds": [],
-  "topics": {}
+  "completedTopicIds": [
+    3,
+    4
+  ],
+  "topics": {
+    "3": {
+      "topic": "Cybersecurity & Data Protection",
+      "lineArtFile": "3_Cybersecurity_Data_Protection_LineArt.jpeg",
+      "solidFile": "3_Cybersecurity_Data_Protection_Solid.jpeg",
+      "completedAt": "2026-08-25T23:39:25.620Z"
+    },
+    "4": {
+      "topic": "Digital Marketing & Advertising",
+      "lineArtFile": "4_Digital_Marketing_Advertising_LineArt.jpeg",
+      "solidFile": "4_Digital_Marketing_Advertising_Solid.jpeg",
+      "completedAt": "2026-08-25T23:41:39.569Z"
+    }
+  }
 }
