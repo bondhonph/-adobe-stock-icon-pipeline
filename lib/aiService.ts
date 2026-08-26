@@ -45,6 +45,24 @@ Rules:
 - Return ONLY the numbered list of 32 icons without intro or outro.`;
 
   try {
+    if (settings.provider === 'gemini') {
+      const targetModel = settings.model || 'gemini-1.5-flash';
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${settings.apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.7 }
+          })
+        }
+      );
+      const data = await response.json();
+      const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      return parseIconList(rawText, topicName);
+    }
+
     if (settings.provider === 'openrouter' || settings.provider === 'openai') {
       const endpoint =
         settings.provider === 'openrouter'
