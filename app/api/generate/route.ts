@@ -22,15 +22,36 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ icons: fallback, source: 'smart_offline' });
     }
 
+    // Load active Master Prompt to extract rules & icon count
+    let activeTemplateDesc = 'Commercial Adobe Stock Standard';
+    let iconCount = 32;
+
+    try {
+      const fs = await import('fs');
+      const path = await import('path');
+      const promptsFile = path.join(process.cwd(), 'data', 'custom_prompts.json');
+      if (fs.existsSync(promptsFile)) {
+        const config = JSON.parse(fs.readFileSync(promptsFile, 'utf-8'));
+        const activeTpl = (config.templates || []).find((t: any) => t.id === config.activeTemplateId) || config.templates?.[0];
+        if (activeTpl) {
+          activeTemplateDesc = activeTpl.name || activeTpl.description || activeTemplateDesc;
+          const match = (activeTpl.outlineTemplate || '').match(/(\d+)\s*(?:bold|line|solid|outline|distinct|professional)?\s*icons/i);
+          if (match) iconCount = parseInt(match[1], 10);
+        }
+      }
+    } catch (e) {}
+
     const prompt = `You are an expert Adobe Stock contributor, commercial graphic designer, icon-set researcher, and AI prompt engineer.
 Theme: "${topic}".
-Generate EXACTLY 32 commercially useful, visually distinct, highly recognizable, professional icon concepts directly related to "${topic}" for Adobe Stock.
+Master Prompt Rules & Style: "${activeTemplateDesc}".
+
+Generate EXACTLY ${iconCount} commercially useful, visually distinct, highly recognizable, professional icon concepts directly related to "${topic}" for Adobe Stock that strictly follow the Master Prompt guidelines.
 Rules:
-- Exactly 32 numbered lines (1. to 32.)
+- Exactly ${iconCount} numbered lines (1. to ${iconCount}.)
 - No duplicate or near-duplicate concepts
-- Suitable for 8x4 grid icon set
+- Perfectly optimized for high commercial sales on Adobe Stock & MicroStock platforms
 - Short descriptive names (2 to 4 words per icon)
-- Return ONLY the numbered list of 32 icons without intro or outro.`;
+- Return ONLY the numbered list of ${iconCount} icons without intro or outro.`;
 
     if (provider === 'gemini') {
       const targetModel = model || 'gemini-1.5-flash';

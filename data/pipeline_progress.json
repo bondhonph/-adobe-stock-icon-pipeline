@@ -1,9 +1,23 @@
 {
   "completedTopicIds": [
     3,
-    4
+    4,
+    1,
+    2
   ],
   "topics": {
+    "1": {
+      "topic": "Business Strategy & Management",
+      "lineArtFile": "1_Business_Strategy_Management_LineArt.jpeg",
+      "solidFile": "1_Business_Strategy_Management_Solid.jpeg",
+      "completedAt": "2026-08-26T00:43:37.640Z"
+    },
+    "2": {
+      "topic": "Artificial Intelligence & Machine Learning",
+      "lineArtFile": "2_Artificial_Intelligence_Machine_Learning_LineArt.jpeg",
+      "solidFile": "2_Artificial_Intelligence_Machine_Learning_Solid.jpeg",
+      "completedAt": "2026-08-26T00:45:29.605Z"
+    },
     "3": {
       "topic": "Cybersecurity & Data Protection",
       "lineArtFile": "3_Cybersecurity_Data_Protection_LineArt.jpeg",
